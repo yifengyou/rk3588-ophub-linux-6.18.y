@@ -43,7 +43,6 @@
 #include <linux/etherdevice.h>
 #include <linux/delay.h>
 #include <linux/mii.h>
-#include <linux/of.h>
 #include <linux/if_vlan.h>
 #include <linux/crc32.h>
 #include <linux/interrupt.h>
@@ -13480,7 +13479,7 @@ rtl8125_init_hw_phy_mcu(struct net_device *dev)
 }
 #else
 static void
-__maybe_unused rtl8125_set_phy_mcu_8125d_1_efuse(struct net_device *dev)
+rtl8125_set_phy_mcu_8125d_1_efuse(struct net_device *dev)
 {
         (void)dev;
 }
@@ -15227,98 +15226,13 @@ rtl8125_setup_mqs_reg(struct rtl8125_private *tp)
                 tp->imr_reg[i] = (u16)(IMR1_8125 + (i - 1) * 4);
 }
 
-static int
-rtl8125_devname_configuration(struct rtl8125_private *tp)
-{
-        const char *devname;
-        int ret;
-
-        ret = of_property_read_string(tp->pci_dev->dev.of_node,
-                                      "label", &devname);
-
-        if (ret)
-                return ret;
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,8,0)
-        strscpy(tp->dev->name, devname, IFNAMSIZ);
-#else
-        strlcpy(tp->dev->name, devname, IFNAMSIZ);
-#endif
-
-        return 0;
-}
-
-/*
- * Refer to RTL8125 datasheet 5.Customizable LED Configuration
- * Register Name	IO Address
- * LEDSEL0		0x18
- * LEDSEL1		0x86
- * LEDSEL2		0x84
- * LEDSEL3		0x96
- * LEDFEATURE		0x94
- *
- * LEDSEL Bit[]		Description
- * Bit0			Link10M
- * Bit1			Link100M
- * Bit3			Link1000M
- * Bit5			Link2.5G
- * Bit9			ACT
- * Bit10		preboot enable
- * Bit11		lp enable
- * Bit12		active low/high
- *
- * LEDFEATURE		Description
- * Bit0			LED Table V1/V2
- * Bit1~3		Reserved
- * Bit4~5		LED Blinking Duty Cycle	12.5%/ 25%/ 50%/ 75%
- * Bit6~7		LED Blinking Freq. 240ms/160ms/80ms/Link-Speed-Dependent
- */
-static void
-rtl8125_led_configuration(struct rtl8125_private *tp)
-{
-        u32 led_data;
-        int ret;
-
-	// To be compatible with the old device tree
-        ret = of_property_read_u32(tp->pci_dev->dev.of_node,
-                                  "realtek,led-data", &led_data);
-        if (ret == 0)
-                RTL_W16(tp, LEDSEL_0_8125, led_data & LEDSEL_MASK_8125);
-
-	// The new device tree is written as follows:
-        ret = of_property_read_u32(tp->pci_dev->dev.of_node,
-                                  "r8125,led0", &led_data);
-        if (ret == 0)
-                RTL_W16(tp, LEDSEL_0_8125, led_data & LEDSEL_MASK_8125);
-
-        ret = of_property_read_u32(tp->pci_dev->dev.of_node,
-                                  "r8125,led1", &led_data);
-        if (ret == 0)
-                RTL_W16(tp, LEDSEL_1_8125, led_data & LEDSEL_MASK_8125);
-
-        ret = of_property_read_u32(tp->pci_dev->dev.of_node,
-                                  "r8125,led2", &led_data);
-        if (ret == 0)
-                RTL_W16(tp, LEDSEL_2_8125, led_data & LEDSEL_MASK_8125);
-
-        ret = of_property_read_u32(tp->pci_dev->dev.of_node,
-                                  "r8125,led3", &led_data);
-        if (ret == 0)
-                RTL_W16(tp, LEDSEL_3_8125, led_data & LEDSEL_MASK_8125);
-
-        ret = of_property_read_u32(tp->pci_dev->dev.of_node,
-                                  "r8125,led-feature", &led_data);
-        if (ret == 0)
-                RTL_W8(tp, LEDFEATURE, led_data & LEDFEATURE_MASK_8125);
-}
-
 static void
 rtl8125_backup_led_select(struct rtl8125_private *tp)
 {
         tp->BackupLedSel[1] = RTL_R16(tp, LEDSEL_1_8125);
         tp->BackupLedSel[2] = RTL_R16(tp, LEDSEL_2_8125);
         tp->BackupLedSel[3] = RTL_R16(tp, LEDSEL_3_8125);
-        tp->BackupLedSel[0] = RTL_R16(tp, LEDSEL_0_8125);
+        tp->BackupLedSel[0] = RTL_R16(tp, CustomLED);
 }
 
 static void
@@ -15327,7 +15241,7 @@ rtl8125_restore_led_select(struct rtl8125_private *tp)
         RTL_W16(tp, LEDSEL_1_8125, tp->BackupLedSel[1]);
         RTL_W16(tp, LEDSEL_2_8125, tp->BackupLedSel[2]);
         RTL_W16(tp, LEDSEL_3_8125, tp->BackupLedSel[3]);
-        RTL_W16(tp, LEDSEL_0_8125, tp->BackupLedSel[0]);
+        RTL_W16(tp, CustomLED, tp->BackupLedSel[0]);
 }
 
 static bool
@@ -15985,10 +15899,7 @@ rtl8125_init_software_variable(struct net_device *dev)
         else if (tp->InitRxDescType == RX_DESC_RING_TYPE_4)
                 tp->rtl8125_rx_config &= ~EnableRxDescV4_1;
 
-        rtl8125_devname_configuration(tp);
-
-        rtl8125_led_configuration(tp);
-	rtl8125_backup_led_select(tp);
+        rtl8125_backup_led_select(tp);
 
         tp->wol_opts = rtl8125_get_hw_wol(tp);
         tp->wol_enabled = (tp->wol_opts) ? WOL_ENABLED : WOL_DISABLED;
@@ -17310,10 +17221,8 @@ rtl8125_test_phy_ocp_v5(struct rtl8125_private *tp)
 
         rtl8125_wait_phy_state_ready(tp, HW_PHY_STATUS_INI, 5000000);
 
-#ifndef ENABLE_USE_FIRMWARE_FILE
         if (tp->mcfg == CFG_METHOD_10)
                 rtl8125_set_phy_mcu_8125d_1_efuse(tp->dev);
-#endif
 
         rtl8125_set_eth_phy_ocp_bit(tp, 0xA468, BIT_0);
 
@@ -19265,6 +19174,12 @@ rtl8125_hw_start(struct net_device *dev)
         rtl8125_enable_hw_interrupt(tp);
 
         rtl8125_lib_reset_complete(tp);
+
+	// 强制使能并配置 LED0：10M/100M/1G/2.5G 链接时常亮，有数据时闪烁
+        RTL_W16(tp, CustomLED, 0x022B);     // LED0
+        RTL_W16(tp, LEDSEL_1_8125, 0x022B); // LED1
+        RTL_W16(tp, LEDSEL_2_8125, 0x0);    // LED2
+        RTL_W16(tp, LEDSEL_3_8125, 0x0);    // LED3
 }
 
 static int

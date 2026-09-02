@@ -1396,18 +1396,6 @@ struct _kc_ethtool_pauseparam {
 #define ETHTOOL_BUSINFO_LEN 32
 #endif
 
-#define RTL8125_NUM_LEDS            4
-#define LEDFEATURE_MASK_8125        0xf1
-#define LEDSEL_MASK_8125            0x1e2b
-#define RTL8125_LED_CTRL_ACT_LO_HI  BIT(12)
-#define RTL8125_LED_CTRL_LP_EN      BIT(11)
-#define RTL8125_LED_CTRL_PREBOOT_EN BIT(10)
-#define RTL8125_LED_CTRL_ACT        BIT(9)
-#define RTL8125_LED_CTRL_LINK_2500  BIT(5)
-#define RTL8125_LED_CTRL_LINK_1000  BIT(3)
-#define RTL8125_LED_CTRL_LINK_100   BIT(1)
-#define RTL8125_LED_CTRL_LINK_10    BIT(0)
-
 /*****************************************************************************/
 
 enum RTL8125_registers {
@@ -1416,7 +1404,7 @@ enum RTL8125_registers {
         MAR0            = 0x08,     /* Multicast filter. */
         CounterAddrLow      = 0x10,
         CounterAddrHigh     = 0x14,
-        LEDSEL_0_8125       = 0x18,
+        CustomLED       = 0x18,
         TxDescStartAddrLow  = 0x20,
         TxDescStartAddrHigh = 0x24,
         TxHDescStartAddrLow = 0x28,
@@ -1456,7 +1444,6 @@ enum RTL8125_registers {
         LEDSEL_2_8125   = 0x84,
         LEDSEL_1_8125   = 0x86,
         TimeInt2        = 0x8C,
-        LEDFEATURE      = 0x94,
         LEDSEL_3_8125   = 0x96,
         OCPDR           = 0xB0,
         MACOCP          = 0xB0,
