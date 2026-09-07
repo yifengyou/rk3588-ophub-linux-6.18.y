@@ -434,9 +434,6 @@ func getFilteredDevices() []BlockDevice {
 
 func getMockDevices() []BlockDevice {
 	return []BlockDevice{
-		{Name: "sda", Path: "/dev/sda", Type: "SATA", Size: "256 GB", Model: "Samsung SSD"},
-		{Name: "nvme0n1", Path: "/dev/nvme0n1", Type: "NVMe", Size: "1 TB", Model: "WD Black"},
-		{Name: "sdb", Path: "/dev/sdb", Type: "USB", Size: "32 GB", Model: "Generic USB"},
 	}
 }
 

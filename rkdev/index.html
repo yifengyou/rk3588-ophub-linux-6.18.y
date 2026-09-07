@@ -285,9 +285,11 @@ async function loadDevices() {
         sel.innerHTML = '<option value="">-- 请选择目标设备 --</option>';
         if (!devices?.length) {
             const o = document.createElement('option');
-            o.text = "未发现符合条件的设备"; o.disabled = true;
+            o.text = "未发现符合条件的设备";
+            o.disabled = true;
+            o.selected = true;
             sel.add(o);
-            showResult("未检测到设备", "error");
+            showResult("未扫描到可用设备，请插入 U 盘、SATA 硬盘或 NVMe 硬盘后点击刷新", "error");
             return;
         }
         devices.forEach(d => {
