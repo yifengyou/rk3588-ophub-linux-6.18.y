@@ -88,6 +88,7 @@
     <div class="card">
         <h1>彼度云G98/Z98固件更新助手</h1>
         <p>选择目标存储设备 (U盘、SATA盘、M2 NVME盘)，然后选择固件文件进行刷写。</p>
+        <p>支持 <strong>.img / .bin</strong> 固件及 <strong>.img.gz / .bin.gz</strong> 压缩包（上传时自动解压）。</p>
 
         <div class="form-group">
             <label for="device-select"><strong>目标设备:</strong></label>
@@ -96,7 +97,7 @@
         </div>
 
         <form id="upload-form" class="form-group" onsubmit="handleUpload(event)">
-            <input type="file" name="firmware" id="firmware-file" required>
+            <input type="file" name="firmware" id="firmware-file" accept=".img,.bin,.gz" required>
             <button type="submit" class="primary" id="btn-flash">⚡ 开始刷写</button>
         </form>
 
@@ -119,6 +120,7 @@
             <h3>⚠️ 高危操作注意</h3>
             <ul>
                 <li><strong>过滤规则</strong>：仅显示 U盘、SATA盘、M2 NVME 设备。</li>
+                <li><strong>文件类型</strong>：仅支持 .img / .bin 固件及 .img.gz / .bin.gz 压缩包（gzip 自动解压），其他类型将被拒绝。</li>
                 <li><strong>数据丢失风险</strong>：刷写操作将覆盖目标设备上的所有数据！</li>
                 <li><strong>写入方式</strong>：文件先暂存至 /tmp/，再以 4MB 块逐块写入 (等效 dd bs=4M oflag=sync)。</li>
             </ul>
@@ -275,6 +277,24 @@ function sendResize() {
 // ==================== Flash Functions ====================
 let eventSource = null;
 
+// 固件文件名预检：仅支持 .img/.bin 及其 .gz 压缩形式
+function fwNameOk(name) {
+    let s = (name || '').toLowerCase();
+    if (s.endsWith('.gz')) s = s.slice(0, -3);
+    return s.endsWith('.img') || s.endsWith('.bin');
+}
+
+document.getElementById('firmware-file').addEventListener('change', function () {
+    if (!this.files.length) return;
+    const name = this.files[0].name;
+    if (!fwNameOk(name)) {
+        showResult(`⚠️ 不支持的文件类型: ${name}，仅支持 .img / .bin 固件或其 gzip 压缩包(.img.gz / .bin.gz)`, "error");
+        this.value = '';
+        return;
+    }
+    showResult(/\.gz$/i.test(name) ? `已选择 ${name}，上传时将自动解压` : `已选择 ${name}`, "info");
+});
+
 async function loadDevices() {
     const sel = document.getElementById('device-select');
     sel.innerHTML = '<option value="">加载中...</option>';
@@ -311,6 +331,10 @@ async function handleUpload(e) {
     const file = document.getElementById('firmware-file');
     if (!dev.value) { showResult("请先选择目标设备！", "error"); return; }
     if (!file.files.length) { showResult("请先选择固件文件！", "error"); return; }
+    if (!fwNameOk(file.files[0].name)) {
+        showResult(`⚠️ 不支持的文件类型: ${file.files[0].name}，仅支持 .img / .bin 固件或其 gzip 压缩包(.img.gz / .bin.gz)`, "error");
+        return;
+    }
 
     const mb = (file.files[0].size / 1048576).toFixed(1);
     if (!confirm(`⚠️ 确定要将 ${mb} MB 刷写到 ${dev.value}？\n数据将被永久清除！`)) return;
@@ -321,7 +345,7 @@ async function handleUpload(e) {
 
     const btn = document.getElementById('btn-flash');
     btn.disabled = true; btn.textContent = "⏳ 执行中...";
-    showResult("正在上传到 /tmp/ ...", "info");
+    showResult(/\.gz$/i.test(file.files[0].name) ? "正在上传并解压到 /tmp/ ..." : "正在上传到 /tmp/ ...", "info");
     hideProgress();
 
     try {

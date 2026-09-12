@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -26,7 +28,7 @@ var indexHTML string
 //go:embed res
 var resFS embed.FS
 
-const uploadDir = "/tmp"
+var uploadDir = "/tmp"
 const blockSize = 4 * 1024 * 1024
 
 // ============ JSON Helpers ============
@@ -217,51 +219,128 @@ func handleReboot(w http.ResponseWriter, r *http.Request) {
 
 // ============ Upload & Flash ============
 
+// checkFirmwareName 校验固件文件名，返回解压后的逻辑文件名
+// 支持 xxx.img / xxx.bin 及其 gzip 压缩形式 xxx.img.gz / xxx.bin.gz（大小写不敏感）
+func checkFirmwareName(name string) (string, error) {
+	lower := strings.ToLower(name)
+	inner := lower
+	if strings.HasSuffix(inner, ".gz") {
+		inner = inner[:len(inner)-len(".gz")]
+	}
+	if strings.HasSuffix(inner, ".img") || strings.HasSuffix(inner, ".bin") {
+		return name[:len(inner)], nil
+	}
+	return "", fmt.Errorf("不支持的文件类型 %q，仅支持 .img / .bin 固件或其 gzip 压缩包(.img.gz / .bin.gz)", name)
+}
+
 func handleUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "仅支持 POST")
 		return
 	}
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
+	// MultipartReader 流式接收：gzip 边收边解压，压缩包不整体落盘（/tmp 为 tmpfs，峰值内存只有解压后一份）
+	mr, err := r.MultipartReader()
+	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "解析表单失败: "+err.Error())
 		return
 	}
-	file, handler, err := r.FormFile("firmware")
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "获取文件失败: "+err.Error())
+
+	var target, safeName, innerName, tmpPath string
+	var written int64
+	var isGzip bool
+
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			jsonErr(w, http.StatusBadRequest, "读取表单失败: "+err.Error())
+			return
+		}
+
+		switch part.FormName() {
+		case "target_device":
+			b, _ := io.ReadAll(io.LimitReader(part, 1024))
+			target = strings.TrimSpace(string(b))
+
+		case "firmware":
+			safeName = filepath.Base(part.FileName())
+			if safeName == "" || safeName == "." {
+				jsonErr(w, http.StatusBadRequest, "获取文件失败: 文件名为空")
+				return
+			}
+			// 文件类型校验：仅支持 .img/.bin 及其 gzip 压缩形式
+			innerName, err = checkFirmwareName(safeName)
+			if err != nil {
+				jsonErr(w, http.StatusBadRequest, err.Error())
+				return
+			}
+
+			// 按魔数识别 gzip 内容（不看扩展名），是 gzip 则流式解压
+			head := make([]byte, 2)
+			n, _ := io.ReadFull(part, head)
+			head = head[:n]
+			isGzip = n == 2 && head[0] == 0x1f && head[1] == 0x8b
+
+			var src io.Reader = io.MultiReader(bytes.NewReader(head), part)
+			if isGzip {
+				gz, gerr := gzip.NewReader(src)
+				if gerr != nil {
+					jsonErr(w, http.StatusBadRequest, "gzip 解压失败: "+gerr.Error())
+					return
+				}
+				defer gz.Close()
+				src = gz
+			}
+
+			tmpPath = filepath.Join(uploadDir, fmt.Sprintf("fw_%d_%s", time.Now().UnixNano(), innerName))
+			dst, cerr := os.Create(tmpPath)
+			if cerr != nil {
+				jsonErr(w, http.StatusInternalServerError, "创建临时文件失败: "+cerr.Error())
+				return
+			}
+			written, err = io.Copy(dst, src)
+			dst.Close()
+			if err != nil {
+				os.Remove(tmpPath)
+				if isGzip {
+					jsonErr(w, http.StatusBadRequest, "gzip 解压失败: "+err.Error())
+				} else {
+					jsonErr(w, http.StatusInternalServerError, "保存文件失败: "+err.Error())
+				}
+				return
+			}
+			if written == 0 {
+				os.Remove(tmpPath)
+				jsonErr(w, http.StatusBadRequest, "文件内容为空")
+				return
+			}
+		}
+		part.Close()
+	}
+
+	if tmpPath == "" {
+		jsonErr(w, http.StatusBadRequest, "获取文件失败: 缺少 firmware 文件")
 		return
 	}
-	defer file.Close()
-
-	target := r.FormValue("target_device")
 	if target == "" || !strings.HasPrefix(target, "/dev/") || strings.Contains(target, "..") {
+		os.Remove(tmpPath)
 		jsonErr(w, http.StatusBadRequest, "非法目标设备路径")
 		return
 	}
 
-	safeName := filepath.Base(handler.Filename)
-	tmpPath := filepath.Join(uploadDir, fmt.Sprintf("fw_%d_%s", time.Now().UnixNano(), safeName))
-
-	dst, err := os.Create(tmpPath)
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, "创建临时文件失败: "+err.Error())
-		return
-	}
-	written, err := io.Copy(dst, file)
-	dst.Close()
-	if err != nil {
-		os.Remove(tmpPath)
-		jsonErr(w, http.StatusInternalServerError, "保存文件失败: "+err.Error())
-		return
-	}
-
-	log.Printf("[UPLOAD] %s (%d bytes) -> %s", tmpPath, written, target)
+	log.Printf("[UPLOAD] %s -> %s (%d bytes, gzip=%v) -> %s", safeName, tmpPath, written, isGzip, target)
 	task := newTask(tmpPath, target, written)
 	go doFlash(task)
 
+	msg := fmt.Sprintf("文件 %s (%d MB) 已暂存，正在刷写到 %s ...", safeName, written/1024/1024, target)
+	if isGzip {
+		msg = fmt.Sprintf("gzip 固件 %s 已自动解压为 %s (%d MB)，正在刷写到 %s ...", safeName, innerName, written/1024/1024, target)
+	}
 	jsonOK(w, map[string]string{
 		"task_id": task.ID,
-		"message": fmt.Sprintf("文件 %s (%d MB) 已暂存，正在刷写到 %s ...", safeName, written/1024/1024, target),
+		"message": msg,
 	})
 }
 
