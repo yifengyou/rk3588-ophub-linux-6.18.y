@@ -47,6 +47,12 @@ const blockSize = 4 * 1024 * 1024
 // Rockchip parameter.txt 里的数值是以 512 字节扇区为单位的，写入目标设备前需要换算成字节偏移量。
 const paramSectorSize = 512
 
+// gptReservedSectors 是磁盘头部预留给保护性 MBR + GPT 主分区表头 + 分区表数组的最小扇区数
+// （1 个保护性 MBR + 1 个 GPT 头 + 128 个 128 字节分区表项 = 32 扇区，共 34 扇区）。
+// parameter.txt 中起始扇区落在此区域内的分区（通常是 loader/idblock 等极早期区域）不通过
+// GPT 管理，仍按原始偏移直接写入。
+const gptReservedSectors = 34
+
 // ============ JSON Helpers ============
 
 func jsonOK(w http.ResponseWriter, data interface{}) {
@@ -80,6 +86,7 @@ type FlashTask struct {
 	Mode     string  `json:"mode,omitempty"`
 
 	Items        []FlashWriteItem `json:"-"`
+	Partitions   []ParamPartition `json:"-"` // 仅 Mode=="multi" 时有效，用于刷写前重建 GPT 分区表
 	TargetDev    string           `json:"-"`
 	CleanupPaths []string         `json:"-"`
 }
@@ -866,9 +873,12 @@ func buildMultiFileTask(files []string, extractDir, target string) (*FlashTask, 
 	task := newTask(target, totalSize)
 	task.Mode = "multi"
 	task.Items = items
+	// 保存完整分区表（而非仅匹配到镜像的部分），用于刷写前按磁盘实际容量重建 GPT 分区表，
+	// 这样即使某些分区本次没有对应镜像文件，也能在分区表中正确保留位置。
+	task.Partitions = partitions
 	task.CleanupPaths = []string{extractDir}
 
-	msg := fmt.Sprintf("固件包解析完成（%s + parameter.txt），%d 个分区匹配到镜像（%d 个分区未匹配，已跳过），共 %d MB，正在写入 %s ...",
+	msg := fmt.Sprintf("固件包解析完成（%s + parameter.txt），%d 个分区匹配到镜像（%d 个分区未匹配，已跳过），共 %d MB，将重建 GPT 分区表后写入 %s ...",
 		sourceDesc, len(items), len(skipped), totalSize/1024/1024, target)
 	if len(skipped) > 0 {
 		log.Printf("[MULTI] 以下分区未找到对应镜像文件，已跳过: %v", skipped)
@@ -921,6 +931,20 @@ func doFlash(task *FlashTask) {
 
 	log.Printf("[%s] Flash start: mode=%s, %d item(s) -> %s (%d bytes)",
 		task.ID, task.Mode, len(task.Items), task.TargetDev, task.Total)
+
+	// 多文件刷写前先按 parameter.txt 重建 GPT 分区表，避免设备上残留与当前磁盘容量不匹配、
+	// 备份表损坏等陈旧分区信息（即 "GPT PMBR size mismatch" / "backup GPT table is corrupt" 问题）。
+	if task.Mode == "multi" && len(task.Partitions) > 0 {
+		updateTask(task.ID, func(t *FlashTask) { t.Status = "partitioning" })
+		if err := applyGPTPartitionTable(task.TargetDev, task.Partitions); err != nil {
+			updateTask(task.ID, func(t *FlashTask) {
+				t.Status = "error"
+				t.Error = "重建 GPT 分区表失败: " + err.Error()
+			})
+			return
+		}
+		updateTask(task.ID, func(t *FlashTask) { t.Status = "writing" })
+	}
 
 	dst, err := os.OpenFile(task.TargetDev, os.O_WRONLY|os.O_SYNC, 0)
 	if err != nil {
@@ -1014,6 +1038,146 @@ func cleanupTask(task *FlashTask) {
 	for _, p := range task.CleanupPaths {
 		os.RemoveAll(p)
 	}
+}
+
+// ============ GPT Partition Table Rebuild ============
+
+// blockDeviceSectors 读取目标块设备的实际容量（单位：512 字节扇区），通过
+// /sys/class/block/<dev>/size 获取，避免依赖外部工具解析。
+func blockDeviceSectors(target string) (uint64, error) {
+	name := strings.TrimPrefix(target, "/dev/")
+	data, err := os.ReadFile(filepath.Join("/sys/class/block", name, "size"))
+	if err != nil {
+		return 0, fmt.Errorf("读取 %s 容量失败: %w", target, err)
+	}
+	v, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("解析 %s 容量失败: %w", target, err)
+	}
+	return v, nil
+}
+
+// applyGPTPartitionTable 依据 parameter.txt 中的分区表，在目标设备上按磁盘当前实际容量
+// 重新创建一份 GPT 分区表（通过 sfdisk 完成，相比 sgdisk/gptfdisk 体积小很多，
+// util-linux 自带，一般无需额外安装）。
+//
+// 这是多文件刷写（package-file/config.cfg + parameter.txt）流程的必要前置步骤：如果不重建
+// 分区表，直接按偏移量写入镜像会导致设备上残留旧的、与当前磁盘容量不匹配的 GPT
+// （典型症状如 fdisk 报 "GPT PMBR size mismatch"、"backup GPT table is corrupt"、
+// "backup GPT table is not on the end of the device"），系统重启后可能无法正确识别分区。
+//
+// 分区表项的起止扇区直接取自 parameter.txt（单位为 512 字节扇区）；size 为 0xFFFFFFFF
+// （parameter.txt 中以 "-" 表示，通常是最后一个分区，如 rootfs/userdata）的分区在生成的
+// sfdisk 脚本中省略 size 字段，由 sfdisk 自动扩展到磁盘末尾并为备份 GPT 表预留空间。
+// 起始扇区落在 GPT 保留区（前 gptReservedSectors 个扇区，含保护性 MBR、主 GPT 头及分区表
+// 数组）内的分区不纳入 GPT 管理，仍按原始偏移直接写入（doFlash 中的逐项写入逻辑本身不受影响）。
+func applyGPTPartitionTable(target string, partitions []ParamPartition) error {
+	sfdiskPath, err := exec.LookPath("sfdisk")
+	if err != nil {
+		return fmt.Errorf("未找到 sfdisk 工具，无法重建 GPT 分区表（util-linux 通常自带，请确认已安装）: %w", err)
+	}
+
+	diskSectors, err := blockDeviceSectors(target)
+	if err != nil {
+		return err
+	}
+	if diskSectors == 0 {
+		return fmt.Errorf("无法获取 %s 的磁盘容量", target)
+	}
+
+	script, created := buildSfdiskScript(partitions, diskSectors)
+	if len(created) == 0 {
+		return fmt.Errorf("parameter.txt 中没有可用于创建 GPT 分区的有效分区项")
+	}
+
+	// --wipe always / --wipe-partitions always：无需交互确认即可清除设备上残留的旧文件系统
+	// 签名及旧分区表（包括与当前磁盘容量不匹配、已损坏的备份 GPT），配合 "label: gpt" 脚本
+	// 头，整块设备会被重新初始化为一份全新的、与磁盘实际容量匹配的 GPT。
+	// --force 用于跳过 sfdisk 在检测到旧分区表异常（如本例中损坏的备份 GPT）时的交互式确认。
+	cmd := exec.Command(sfdiskPath, "--force", "--wipe", "always", "--wipe-partitions", "always", target)
+	cmd.Stdin = strings.NewReader(script)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("sfdisk 写入分区表失败: %v, output: %s\n脚本内容:\n%s", err, string(out), script)
+	}
+
+	rereadPartitionTable(target)
+
+	log.Printf("[GPT] 已通过 sfdisk 在 %s 上重建 GPT 分区表，共 %d 个分区: %v，磁盘容量 %d 扇区\nsfdisk 输出:\n%s",
+		target, len(created), created, diskSectors, string(out))
+	return nil
+}
+
+// buildSfdiskScript 依据 parameter.txt 分区表及磁盘实际容量，生成 sfdisk 可识别的脚本
+// （"label: gpt" 格式，通过 stdin 传给 sfdisk），并返回脚本内容及实际写入脚本中的分区名列表。
+//
+// 每个分区一行，形如：
+//
+//	start=8192, size=737280, name="boot"
+//	start=835584, name="rootfs"
+//
+// 省略 size 字段表示该分区一直占用到下一分区起始处或磁盘末尾，用于 parameter.txt 中
+// size=0xFFFFFFFF（即 "-"）的分区，以及声明大小超出磁盘剩余空间的分区（此时按磁盘实际
+// 容量截断，同样省略 size 交给 sfdisk 处理，避免脚本本身请求了一个超出磁盘范围的分区）。
+func buildSfdiskScript(partitions []ParamPartition, diskSectors uint64) (string, []string) {
+	var b strings.Builder
+	b.WriteString("label: gpt\n")
+	b.WriteString("unit: sectors\n\n")
+
+	var created []string
+	for _, p := range partitions {
+		name := p.Name
+		if idx := strings.Index(name, ":"); idx >= 0 {
+			name = name[:idx]
+		}
+		if name == "" {
+			continue
+		}
+		if uint64(p.Offset) < gptReservedSectors {
+			log.Printf("[GPT] 分区 '%s' 起始扇区 %d 落在 GPT 保留区内（<%d），跳过 GPT 分区创建，仍按原始偏移写入",
+				name, p.Offset, gptReservedSectors)
+			continue
+		}
+		if uint64(p.Offset) >= diskSectors {
+			log.Printf("[GPT] 分区 '%s' 起始扇区 %d 超出磁盘容量 %d 扇区，跳过", name, p.Offset, diskSectors)
+			continue
+		}
+
+		escapedName := strings.ReplaceAll(name, `"`, `\"`)
+		includeSize := p.Size != 0xFFFFFFFF && uint64(p.Offset)+uint64(p.Size) <= diskSectors
+
+		var line string
+		if includeSize {
+			line = fmt.Sprintf("start=%d, size=%d, name=\"%s\"", p.Offset, p.Size, escapedName)
+		} else {
+			line = fmt.Sprintf("start=%d, name=\"%s\"", p.Offset, escapedName)
+		}
+
+		b.WriteString(line)
+		b.WriteString("\n")
+		created = append(created, name)
+	}
+
+	return b.String(), created
+}
+
+// rereadPartitionTable 通知内核重新读取目标设备的分区表，优先使用 partprobe，
+// 不可用时回退到 blockdev --rereadpt；都不可用时仅记录日志，不视为致命错误
+// （分区表本身已经正确写入设备，内核视图会在下次插拔/重启后自动刷新）。
+func rereadPartitionTable(target string) {
+	if p, err := exec.LookPath("partprobe"); err == nil {
+		if out, err := exec.Command(p, target).CombinedOutput(); err != nil {
+			log.Printf("[GPT] partprobe %s 失败: %v, output: %s", target, err, string(out))
+		}
+		return
+	}
+	if p, err := exec.LookPath("blockdev"); err == nil {
+		if out, err := exec.Command(p, "--rereadpt", target).CombinedOutput(); err != nil {
+			log.Printf("[GPT] blockdev --rereadpt %s 失败: %v, output: %s", target, err, string(out))
+		}
+		return
+	}
+	log.Printf("[GPT] 未找到 partprobe/blockdev，内核分区表视图可能需要重新插拔设备或重启后才能刷新")
 }
 
 // ============ parameter.txt parsing ============
@@ -1465,4 +1629,3 @@ func formatBytes(b int64) string {
 	}
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "kMGTPE"[exp])
 }
-
