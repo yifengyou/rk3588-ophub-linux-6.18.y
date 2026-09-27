@@ -97,7 +97,7 @@
         </div>
 
         <form id="upload-form" class="form-group" onsubmit="handleUpload(event)">
-            <input type="file" name="firmware" id="firmware-file" accept=".img,.bin,.gz" required>
+            <input type="file" name="firmware" id="firmware-file" accept=".img,.bin,.gz,.rar,.bz2,.bz" required>
             <button type="submit" class="primary" id="btn-flash">⚡ 开始刷写</button>
         </form>
 
@@ -281,7 +281,7 @@ let eventSource = null;
 function fwNameOk(name) {
     let s = (name || '').toLowerCase();
     if (s.endsWith('.gz')) s = s.slice(0, -3);
-    return s.endsWith('.img') || s.endsWith('.bin');
+    return s.endsWith('.img') || s.endsWith('.bin') || s.endsWith('.rar') || s.endsWith('.bz2');
 }
 
 document.getElementById('firmware-file').addEventListener('change', function () {

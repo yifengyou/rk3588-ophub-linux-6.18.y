@@ -1032,56 +1032,6 @@ R:dnsmasq
 a:0:0:755
 Z:Q1ew5gzcG2fFcQEC1e4cMhGJtf5p8=
 
-C:Q1Na5aGLcbdfsKK/nwM3rFUq2ubQ4=
-P:dropbear
-V:2026.91-r0
-A:aarch64
-S:231720
-I:529928
-T:small SSH 2 client/server designed for small memory environments
-U:https://matt.ucc.asn.au/dropbear/dropbear.html
-L:MIT
-o:dropbear
-m:Natanael Copa <ncopa@alpinelinux.org>
-t:1779216580
-c:e56a1d711fb2dd69206223dcdfd609d91d40ad02
-D:so:libc.musl-aarch64.so.1 so:libutmps.so.0.1 so:libz.so.1
-p:cmd:dropbear=2026.91-r0 cmd:dropbearkey=2026.91-r0
-F:etc
-F:etc/dropbear
-F:usr
-F:usr/bin
-R:dropbearkey
-a:0:0:755
-Z:Q1dwrJnZLAcdnjMhSqVlSmCxeVMwo=
-F:usr/sbin
-R:dropbear
-a:0:0:755
-Z:Q1+ZGu9j8vf/YllWKql02aTQiNpUU=
-
-C:Q1WOoVrvRgBfPTAqDloJ2OEWb3gTM=
-P:dropbear-openrc
-V:2026.91-r0
-A:aarch64
-S:2265
-I:1247
-T:small SSH 2 client/server designed for small memory environments (OpenRC init scripts)
-U:https://matt.ucc.asn.au/dropbear/dropbear.html
-L:MIT
-o:dropbear
-m:Natanael Copa <ncopa@alpinelinux.org>
-t:1779216580
-c:e56a1d711fb2dd69206223dcdfd609d91d40ad02
-i:openrc dropbear=2026.91-r0
-F:etc
-F:etc/conf.d
-R:dropbear
-Z:Q1recMfAei8WB1/RT+66nG4R9CoJs=
-F:etc/init.d
-R:dropbear
-a:0:0:755
-Z:Q1Fe3GqspqgAGeS34YxswtfF5PP3Y=
-
 C:Q1xFnL6G5Mg5/8lajRfFAmmKgALEg=
 P:e2fsprogs
 V:1.47.4-r0

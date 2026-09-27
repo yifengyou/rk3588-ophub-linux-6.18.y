@@ -9,7 +9,7 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 # update rkdev
 cd ${WORKDIR}/rkdev
-./build.sh
+./kdev-build.sh
 cp -a rkdev_arm64 ${WORKDIR}/rootfs/
 sync
 

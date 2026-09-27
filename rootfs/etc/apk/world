@@ -7,7 +7,6 @@ bridge
 busybox
 dhcpcd
 dnsmasq
-dropbear
 e2fsprogs
 e2fsprogs-extra
 ethtool

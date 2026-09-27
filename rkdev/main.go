@@ -1,8 +1,10 @@
 package main
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/bzip2"
 	"compress/gzip"
 	"embed"
 	"encoding/binary"
@@ -23,6 +25,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/creack/pty"
+	"github.com/nwaples/rardecode/v2"
 	"golang.org/x/net/websocket"
 )
 
@@ -32,8 +35,17 @@ var indexHTML string
 //go:embed res
 var resFS embed.FS
 
-var uploadDir = "/tmp"
+// uploadDir 是所有本次上传相关临时文件（压缩包、单文件固件）的根目录
+var uploadDir = "/tmp/kdev"
+
+// unpackDir 是压缩包解压后的目标目录，位于 uploadDir 之下
+var unpackDir = filepath.Join(uploadDir, "unpack")
+
 const blockSize = 4 * 1024 * 1024
+
+// paramSectorSize 是 parameter.txt 中 mtdparts 分区表 offset/size 的单位（扇区大小，字节）。
+// Rockchip parameter.txt 里的数值是以 512 字节扇区为单位的，写入目标设备前需要换算成字节偏移量。
+const paramSectorSize = 512
 
 // ============ JSON Helpers ============
 
@@ -50,14 +62,11 @@ func jsonErr(w http.ResponseWriter, code int, msg string) {
 
 // ============ Flash Task Management ============
 
-// FlashWriteItem 是一次"把某个文件写到目标设备某个字节偏移处"的任务。
-// 单镜像模式下只有一个 Item（Offset=0，整盘写入）；
-// 多文件（parameter.txt + config.cfg）模式下每个分区一个 Item。
 type FlashWriteItem struct {
-	Name   string // 分区名 / 显示名，仅用于日志和进度展示
-	Offset int64  // 在目标设备上的字节偏移
-	Size   int64  // 源文件大小（字节），用于进度计算
-	Path   string // 源文件在本地磁盘上的路径
+	Name   string
+	Offset int64
+	Size   int64
+	Path   string
 }
 
 type FlashTask struct {
@@ -68,11 +77,11 @@ type FlashTask struct {
 	Total    int64   `json:"total"`
 	Speed    float64 `json:"speed"`
 	Error    string  `json:"error,omitempty"`
-	Mode     string  `json:"mode,omitempty"` // "single" 或 "multi"，仅供参考
+	Mode     string  `json:"mode,omitempty"`
 
 	Items        []FlashWriteItem `json:"-"`
 	TargetDev    string           `json:"-"`
-	CleanupPaths []string         `json:"-"` // 完成后需要删除的临时文件/目录
+	CleanupPaths []string         `json:"-"`
 }
 
 var (
@@ -119,9 +128,6 @@ type LsblkOutput struct {
 	BlockDevices []LsblkDevice `json:"blockdevices"`
 }
 
-// 【关键修复】
-// Size 用 json.Number：兼容 lsblk 输出数字(128035675648)或字符串("128035675648")两种格式
-// Model/Tran 用 *string 指针：兼容 null 值（虽然 string 也能接收 null，但指针更明确）
 type LsblkDevice struct {
 	Name  string      `json:"name"`
 	Size  json.Number `json:"size"`
@@ -141,12 +147,13 @@ func main() {
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { tmpl.Execute(w, nil) })
-	http.HandleFunc("/api/devices", func(w http.ResponseWriter, r *http.Request) { jsonOK(w, getFilteredDevices()) })
+	http.HandleFunc("/api/devices", func(w http.ResponseWriter, r *http.Request) {
+		jsonOK(w, getFilteredDevices())
+	})
 	http.HandleFunc("/upload", handleUpload)
 	http.HandleFunc("/api/progress", handleProgress)
 	http.HandleFunc("/api/reboot", handleReboot)
 
-	// ✅ WebSocket 终端端点
 	http.Handle("/api/terminal", websocket.Handler(handleTerminal))
 	http.Handle("/res/", http.StripPrefix("/res/", http.FileServer(http.FS(resSubFS))))
 
@@ -236,8 +243,7 @@ func handleReboot(w http.ResponseWriter, r *http.Request) {
 
 // ============ Upload & Flash ============
 
-// checkFirmwareName 校验固件文件名，返回解压后的逻辑文件名
-// 支持 xxx.img / xxx.bin 及其 gzip 压缩形式 xxx.img.gz / xxx.bin.gz（大小写不敏感）
+// checkFirmwareName 校验单一固件文件名（不含打包格式）
 func checkFirmwareName(name string) (string, error) {
 	lower := strings.ToLower(name)
 	inner := lower
@@ -247,7 +253,50 @@ func checkFirmwareName(name string) (string, error) {
 	if strings.HasSuffix(inner, ".img") || strings.HasSuffix(inner, ".bin") {
 		return name[:len(inner)], nil
 	}
-	return "", fmt.Errorf("不支持的文件类型 %q，仅支持 .img / .bin 固件、其 gzip 压缩包(.img.gz / .bin.gz)，或 .zip 固件包", name)
+	return "", fmt.Errorf("不支持的文件类型 %q，仅支持 .img/.bin 固件及其 gzip 压缩包", name)
+}
+
+// ============ Archive Kind Detection ============
+
+// archiveKind 标识上传文件所使用的打包格式
+type archiveKind int
+
+const (
+	archiveNone archiveKind = iota
+	archiveZip
+	archiveTarGz
+	archiveTarBz2
+	archiveRar
+)
+
+func (k archiveKind) String() string {
+	switch k {
+	case archiveZip:
+		return "zip"
+	case archiveTarGz:
+		return "tar.gz"
+	case archiveTarBz2:
+		return "tar.bz2"
+	case archiveRar:
+		return "rar"
+	default:
+		return "none"
+	}
+}
+
+// detectArchiveKind 根据文件名判断打包格式：支持 zip / tar.gz(.tgz) / tar.bz2(.tbz2/.tbz) / rar
+func detectArchiveKind(lowerName string) archiveKind {
+	switch {
+	case strings.HasSuffix(lowerName, ".zip"):
+		return archiveZip
+	case strings.HasSuffix(lowerName, ".tar.gz"), strings.HasSuffix(lowerName, ".tgz"):
+		return archiveTarGz
+	case strings.HasSuffix(lowerName, ".tar.bz2"), strings.HasSuffix(lowerName, ".tbz2"), strings.HasSuffix(lowerName, ".tbz"):
+		return archiveTarBz2
+	case strings.HasSuffix(lowerName, ".rar"):
+		return archiveRar
+	}
+	return archiveNone
 }
 
 func handleUpload(w http.ResponseWriter, r *http.Request) {
@@ -255,18 +304,29 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusMethodNotAllowed, "仅支持 POST")
 		return
 	}
-	// MultipartReader 流式接收。
-	// - 单个 .img/.bin(.gz)：像原来一样边收边解压，压缩包不整体落盘。
-	// - .zip 固件包：需要随机访问才能解压，只能先整体落盘到 /tmp，再解压分析。
+
+	// 每次上传前先清空 uploadDir，保证不会残留上一次上传的文件/解压产物，
+	// 然后重新创建 uploadDir 及其下的 unpack 子目录。
+	if err := os.RemoveAll(uploadDir); err != nil {
+		jsonErr(w, http.StatusInternalServerError, "清理上传目录失败: "+err.Error())
+		return
+	}
+	if err := os.MkdirAll(unpackDir, 0755); err != nil {
+		jsonErr(w, http.StatusInternalServerError, "创建上传目录失败: "+err.Error())
+		return
+	}
+
 	mr, err := r.MultipartReader()
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "解析表单失败: "+err.Error())
 		return
 	}
 
-	var target, safeName, innerName, tmpPath, zipPath string
+	var target, safeName, innerName, tmpPath string
 	var written int64
-	var isGzip, isZip bool
+	var isGzip bool
+	var kind archiveKind
+	var archivePath string // zip/rar 需要先落盘的路径
 
 	for {
 		part, err := mr.NextPart()
@@ -290,12 +350,78 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			lowerName := strings.ToLower(safeName)
+			kind = detectArchiveKind(lowerName)
 
-			if strings.HasSuffix(lowerName, ".zip") {
-				// ---- 情况：固件包 (.zip)，里面可能是 parameter.txt + config.cfg + 多个镜像 ----
-				isZip = true
-				zipPath = filepath.Join(uploadDir, fmt.Sprintf("pkg_%d.zip", time.Now().UnixNano()))
-				dst, cerr := os.Create(zipPath)
+			// ==== 情况1: tar.gz / tgz — 流式解压，不落盘压缩包 ====
+			if kind == archiveTarGz {
+				extractDir := filepath.Join(unpackDir, fmt.Sprintf("pkg_%d_targz", time.Now().UnixNano()))
+				if err := os.MkdirAll(extractDir, 0755); err != nil {
+					jsonErr(w, http.StatusInternalServerError, "创建解压目录失败: "+err.Error())
+					return
+				}
+				files, err := extractTarGz(part, extractDir)
+				if err != nil {
+					os.RemoveAll(extractDir)
+					jsonErr(w, http.StatusBadRequest, "解压 tar.gz 失败: "+err.Error())
+					return
+				}
+				if len(files) == 0 {
+					os.RemoveAll(extractDir)
+					jsonErr(w, http.StatusBadRequest, "tar.gz 包内没有常规文件")
+					return
+				}
+				task, msg, err := buildTaskFromExtracted(files, extractDir, target)
+				if err != nil {
+					os.RemoveAll(extractDir)
+					jsonErr(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				log.Printf("[UPLOAD] %s -> tar.gz 解压到 %s，%d 文件，mode=%s -> %s",
+					safeName, extractDir, len(files), task.Mode, target)
+				go doFlash(task)
+				jsonOK(w, map[string]string{"task_id": task.ID, "message": msg})
+				return
+			}
+
+			// ==== 情况2: tar.bz2 / tbz2 / tbz — 流式解压，不落盘压缩包 ====
+			if kind == archiveTarBz2 {
+				extractDir := filepath.Join(unpackDir, fmt.Sprintf("pkg_%d_tarbz2", time.Now().UnixNano()))
+				if err := os.MkdirAll(extractDir, 0755); err != nil {
+					jsonErr(w, http.StatusInternalServerError, "创建解压目录失败: "+err.Error())
+					return
+				}
+				files, err := extractTarBz2(part, extractDir)
+				if err != nil {
+					os.RemoveAll(extractDir)
+					jsonErr(w, http.StatusBadRequest, "解压 tar.bz2 失败: "+err.Error())
+					return
+				}
+				if len(files) == 0 {
+					os.RemoveAll(extractDir)
+					jsonErr(w, http.StatusBadRequest, "tar.bz2 包内没有常规文件")
+					return
+				}
+				task, msg, err := buildTaskFromExtracted(files, extractDir, target)
+				if err != nil {
+					os.RemoveAll(extractDir)
+					jsonErr(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				log.Printf("[UPLOAD] %s -> tar.bz2 解压到 %s，%d 文件，mode=%s -> %s",
+					safeName, extractDir, len(files), task.Mode, target)
+				go doFlash(task)
+				jsonOK(w, map[string]string{"task_id": task.ID, "message": msg})
+				return
+			}
+
+			// ==== 情况3: zip / rar — 需先整体落盘再解压 ====
+			if kind == archiveZip || kind == archiveRar {
+				ext := ".zip"
+				if kind == archiveRar {
+					ext = ".rar"
+				}
+				archivePath = filepath.Join(uploadDir, fmt.Sprintf("pkg_%d%s", time.Now().UnixNano(), ext))
+				dst, cerr := os.Create(archivePath)
 				if cerr != nil {
 					jsonErr(w, http.StatusInternalServerError, "创建临时文件失败: "+cerr.Error())
 					return
@@ -303,24 +429,22 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 				written, err = io.Copy(dst, part)
 				dst.Close()
 				if err != nil {
-					os.Remove(zipPath)
+					os.Remove(archivePath)
 					jsonErr(w, http.StatusInternalServerError, "保存固件包失败: "+err.Error())
 					return
 				}
 				if written == 0 {
-					os.Remove(zipPath)
+					os.Remove(archivePath)
 					jsonErr(w, http.StatusBadRequest, "文件内容为空")
 					return
 				}
 			} else {
-				// ---- 情况：单一镜像文件 .img/.bin，或其 gzip 压缩形式 ----
+				// ==== 情况4: 单文件 .img/.bin 或 .gz ====
 				innerName, err = checkFirmwareName(safeName)
 				if err != nil {
 					jsonErr(w, http.StatusBadRequest, err.Error())
 					return
 				}
-
-				// 按魔数识别 gzip 内容（不看扩展名），是 gzip 则流式解压
 				head := make([]byte, 2)
 				n, _ := io.ReadFull(part, head)
 				head = head[:n]
@@ -364,13 +488,14 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		part.Close()
 	}
 
-	if !isZip && tmpPath == "" {
+	// 后续处理（zip / rar / 单文件）；tar.gz / tar.bz2 已在上面提前 return
+	if kind != archiveZip && kind != archiveRar && tmpPath == "" {
 		jsonErr(w, http.StatusBadRequest, "获取文件失败: 缺少 firmware 文件")
 		return
 	}
 	if target == "" || !strings.HasPrefix(target, "/dev/") || strings.Contains(target, "..") {
-		if isZip {
-			os.Remove(zipPath)
+		if kind == archiveZip || kind == archiveRar {
+			os.Remove(archivePath)
 		} else {
 			os.Remove(tmpPath)
 		}
@@ -381,19 +506,24 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	var task *FlashTask
 	var msg string
 
-	if isZip {
-		// 解压固件包，再判断"解压后是单一镜像"还是"多个文件"
-		extractDir := filepath.Join(uploadDir, fmt.Sprintf("pkg_%d", time.Now().UnixNano()))
+	if kind == archiveZip || kind == archiveRar {
+		extractDir := filepath.Join(unpackDir, fmt.Sprintf("pkg_%d", time.Now().UnixNano()))
 		if err := os.MkdirAll(extractDir, 0755); err != nil {
-			os.Remove(zipPath)
+			os.Remove(archivePath)
 			jsonErr(w, http.StatusInternalServerError, "创建解压目录失败: "+err.Error())
 			return
 		}
-		files, err := extractZip(zipPath, extractDir)
-		os.Remove(zipPath) // zip 本身解压完就不再需要
+
+		var files []string
+		if kind == archiveZip {
+			files, err = extractZip(archivePath, extractDir)
+		} else {
+			files, err = extractRar(archivePath, extractDir)
+		}
+		os.Remove(archivePath) // 压缩包解压完即删除
 		if err != nil {
 			os.RemoveAll(extractDir)
-			jsonErr(w, http.StatusBadRequest, "解压固件包失败: "+err.Error())
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("解压 %s 固件包失败: %v", kind, err))
 			return
 		}
 
@@ -413,7 +543,8 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 
 		msg = fmt.Sprintf("文件 %s (%d MB) 已暂存，正在刷写到 %s ...", safeName, written/1024/1024, target)
 		if isGzip {
-			msg = fmt.Sprintf("gzip 固件 %s 已自动解压为 %s (%d MB)，正在刷写到 %s ...", safeName, innerName, written/1024/1024, target)
+			msg = fmt.Sprintf("gzip 固件 %s 已自动解压为 %s (%d MB)，正在刷写到 %s ...",
+				safeName, innerName, written/1024/1024, target)
 		}
 		log.Printf("[UPLOAD] %s -> %s (%d bytes, gzip=%v) -> %s", safeName, tmpPath, written, isGzip, target)
 	}
@@ -426,8 +557,128 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// extractZip 把固件包解压到 destDir，返回所有被解出的常规文件的绝对路径（保留原有目录结构，
-// 方便 config.cfg 里 "Image/xxx.img" 这类相对路径能正确解析）。
+// ============ Archive Extractors ============
+
+// extractTarGz 流式解压 tar.gz 到 destDir，返回解出的常规文件路径列表
+func extractTarGz(reader io.Reader, destDir string) ([]string, error) {
+	gzReader, err := gzip.NewReader(reader)
+	if err != nil {
+		return nil, fmt.Errorf("gzip 解压初始化失败: %w", err)
+	}
+	defer gzReader.Close()
+
+	return extractTarStream(gzReader, destDir)
+}
+
+// extractTarBz2 流式解压 tar.bz2 到 destDir，返回解出的常规文件路径列表
+func extractTarBz2(reader io.Reader, destDir string) ([]string, error) {
+	bz2Reader := bzip2.NewReader(reader)
+	return extractTarStream(bz2Reader, destDir)
+}
+
+// extractTarStream 是 tar 层的通用解压逻辑，供 gzip / bzip2 等上层解压器复用
+func extractTarStream(tarStream io.Reader, destDir string) ([]string, error) {
+	tarReader := tar.NewReader(tarStream)
+	var files []string
+
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("读取 tar 条目失败: %w", err)
+		}
+
+		cleanName := filepath.Clean(header.Name)
+		if cleanName == ".." || strings.HasPrefix(cleanName, "../") || filepath.IsAbs(cleanName) {
+			log.Printf("extractTarStream: 跳过可疑路径: %s", header.Name)
+			continue
+		}
+		cleanName = filepath.FromSlash(cleanName)
+		outPath := filepath.Join(destDir, cleanName)
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(outPath, os.FileMode(header.Mode)); err != nil {
+				return nil, err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+				return nil, err
+			}
+			mode := os.FileMode(header.Mode)
+			if mode == 0 {
+				mode = 0644
+			}
+			outFile, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := io.Copy(outFile, tarReader); err != nil {
+				outFile.Close()
+				return nil, fmt.Errorf("写入 %s 失败: %w", outPath, err)
+			}
+			outFile.Close()
+			files = append(files, outPath)
+		}
+	}
+	return files, nil
+}
+
+// extractRar 解压 RAR 文件到 destDir，返回解出的常规文件路径列表
+func extractRar(rarPath, destDir string) ([]string, error) {
+	r, err := rardecode.OpenReader(rarPath)
+	if err != nil {
+		return nil, fmt.Errorf("打开 RAR 文件失败: %w", err)
+	}
+	defer r.Close()
+
+	var files []string
+	for {
+		header, err := r.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("读取 RAR 条目失败: %w", err)
+		}
+
+		// 防御路径穿越
+		cleanName := filepath.Clean(header.Name)
+		if cleanName == ".." || strings.HasPrefix(cleanName, "../") || filepath.IsAbs(cleanName) {
+			log.Printf("extractRar: 跳过可疑路径: %s", header.Name)
+			continue
+		}
+		cleanName = filepath.FromSlash(cleanName)
+		outPath := filepath.Join(destDir, cleanName)
+
+		if header.IsDir {
+			if err := os.MkdirAll(outPath, 0755); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+			return nil, err
+		}
+
+		outFile, err := os.Create(outPath)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := io.Copy(outFile, r); err != nil {
+			outFile.Close()
+			return nil, fmt.Errorf("写入 %s 失败: %w", outPath, err)
+		}
+		outFile.Close()
+		files = append(files, outPath)
+	}
+	return files, nil
+}
+
+// extractZip 解压 ZIP 文件到 destDir，返回解出的常规文件路径列表
 func extractZip(zipPath, destDir string) ([]string, error) {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -437,10 +688,9 @@ func extractZip(zipPath, destDir string) ([]string, error) {
 
 	var files []string
 	for _, f := range r.File {
-		// 防止 zip slip（../ 或绝对路径逃逸出 destDir）
 		cleanName := filepath.Clean(f.Name)
 		if cleanName == ".." || strings.HasPrefix(cleanName, "../") || filepath.IsAbs(cleanName) {
-			log.Printf("extractZip: 跳过可疑路径条目: %s", f.Name)
+			log.Printf("extractZip: 跳过可疑路径: %s", f.Name)
 			continue
 		}
 		outPath := filepath.Join(destDir, cleanName)
@@ -475,7 +725,162 @@ func extractZip(zipPath, destDir string) ([]string, error) {
 	return files, nil
 }
 
-// findByBaseName 在解压出的文件列表中按文件名（不含路径，大小写不敏感）查找。
+// ============ Task Building From Extracted Files ============
+
+// buildTaskFromExtracted 根据解压后的文件列表构建刷写任务。
+//
+//   - 只有一个文件：直接整盘写入目标设备。
+//   - 多个文件：交由 buildMultiFileTask 处理（package-file/config.cfg + parameter.txt）。
+func buildTaskFromExtracted(files []string, extractDir, target string) (*FlashTask, string, error) {
+	if len(files) == 0 {
+		return nil, "", fmt.Errorf("固件包内没有解压出任何文件")
+	}
+
+	if len(files) == 1 {
+		return buildSingleFileTask(files[0], extractDir, target)
+	}
+
+	return buildMultiFileTask(files, extractDir, target)
+}
+
+// buildSingleFileTask 解压结果只有一个文件时，直接将其整盘写入目标设备
+func buildSingleFileTask(filePath, extractDir, target string) (*FlashTask, string, error) {
+	st, err := os.Stat(filePath)
+	if err != nil {
+		return nil, "", fmt.Errorf("读取解压文件失败: %v", err)
+	}
+
+	task := newTask(target, st.Size())
+	task.Mode = "single"
+	task.Items = []FlashWriteItem{{
+		Name: filepath.Base(filePath), Offset: 0,
+		Size: st.Size(), Path: filePath,
+	}}
+	task.CleanupPaths = []string{extractDir}
+
+	msg := fmt.Sprintf("固件包内只有单一文件 %s (%d MB)，将整盘写入 %s ...",
+		filepath.Base(filePath), st.Size()/1024/1024, target)
+	return task, msg, nil
+}
+
+// buildMultiFileTask 处理解压结果包含多个文件时的刷写逻辑。
+//
+// 支持两种多文件固件包格式，均需要 parameter.txt 分区表（mtdparts，offset/size 单位为 512
+// 字节扇区）配合使用，按“分区名 -> 镜像文件路径”的映射逐一写入对应偏移：
+//
+//  1. package-file + parameter.txt（Rockchip update.img / afptool 风格）：
+//     package-file 是一个文本文件，每行 "<名称> <相对路径>"，将分区/组件名映射到固件包内的
+//     相对文件路径，例如 "boot Image/boot.img"。
+//
+//  2. config.cfg + parameter.txt（RKDevTool 风格）：
+//     config.cfg 是 RKDevTool 使用的二进制配置文件（"CFG" 魔数开头），记录镜像名称、路径及是否
+//     勾选写入，通过 parseConfigCfg / findImageInCfg 解析。
+//
+// 若固件包内既没有 package-file 也没有 config.cfg，则退化为按分区名直接猜测文件名
+// （findImageByGuess，如分区名 "boot" 对应文件 "boot.img"）。
+//
+// parameter.txt 中未能匹配到任何镜像文件的分区会被跳过（这是正常情况，因为分区表里常常包含
+// 一些仅用于占位、不随固件包分发独立镜像的分区）；只有当所有分区都匹配失败时才报错。
+func buildMultiFileTask(files []string, extractDir, target string) (*FlashTask, string, error) {
+	// 1. 定位并解析 parameter.txt 分区表
+	paramPath := findByBaseNames(files, []string{"parameter.txt", "parameter"})
+	if paramPath == "" {
+		return nil, "", fmt.Errorf("固件包内包含 %d 个文件，但未找到 parameter.txt 分区表，无法确定多文件写入方式", len(files))
+	}
+	partitions, err := parseParameterFile(paramPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("解析 parameter.txt 失败: %v", err)
+	}
+
+	// 2. 定位镜像描述文件：优先 package-file，其次 config.cfg，都没有则按文件名猜测
+	var pkgItems []PackageFileItem
+	var cfgItems []CfgImageItem
+	var sourceDesc string
+
+	if pkgPath := findByBaseNames(files, []string{"package-file"}); pkgPath != "" {
+		pkgItems, err = parsePackageFile(pkgPath)
+		if err != nil {
+			return nil, "", fmt.Errorf("解析 package-file 失败: %v", err)
+		}
+		sourceDesc = "package-file"
+	} else if cfgPath := findConfigCfg(files); cfgPath != "" {
+		cfgItems, err = parseConfigCfg(cfgPath)
+		if err != nil {
+			return nil, "", fmt.Errorf("解析 config.cfg 失败: %v", err)
+		}
+		sourceDesc = "config.cfg"
+	} else {
+		sourceDesc = "文件名猜测"
+	}
+
+	// 3. 按分区表逐一匹配镜像文件，构建写入任务
+	var items []FlashWriteItem
+	var totalSize int64
+	var skipped []string
+
+	for _, part := range partitions {
+		if part.Name == "" {
+			continue
+		}
+
+		var imgPath string
+		var found bool
+
+		switch {
+		case pkgItems != nil:
+			imgPath, found = findImageInPackage(pkgItems, files, extractDir, part.Name)
+		case cfgItems != nil:
+			imgPath, found = findImageInCfg(cfgItems, files, extractDir, part.Name)
+		default:
+			imgPath, found = findImageByGuess(files, part.Name)
+		}
+
+		if !found {
+			skipped = append(skipped, part.Name)
+			continue
+		}
+
+		st, serr := os.Stat(imgPath)
+		if serr != nil || !st.Mode().IsRegular() || st.Size() == 0 {
+			skipped = append(skipped, part.Name)
+			if serr != nil {
+				log.Printf("buildMultiFileTask: stat '%s' 失败: %v", imgPath, serr)
+			}
+			continue
+		}
+
+		offsetBytes := int64(part.Offset) * paramSectorSize
+		items = append(items, FlashWriteItem{
+			Name:   part.Name,
+			Offset: offsetBytes,
+			Size:   st.Size(),
+			Path:   imgPath,
+		})
+		totalSize += st.Size()
+	}
+
+	if len(items) == 0 {
+		return nil, "", fmt.Errorf("根据 parameter.txt 的 %d 个分区，未能匹配到任何可写入的镜像文件（描述文件来源: %s）", len(partitions), sourceDesc)
+	}
+
+	task := newTask(target, totalSize)
+	task.Mode = "multi"
+	task.Items = items
+	task.CleanupPaths = []string{extractDir}
+
+	msg := fmt.Sprintf("固件包解析完成（%s + parameter.txt），%d 个分区匹配到镜像（%d 个分区未匹配，已跳过），共 %d MB，正在写入 %s ...",
+		sourceDesc, len(items), len(skipped), totalSize/1024/1024, target)
+	if len(skipped) > 0 {
+		log.Printf("[MULTI] 以下分区未找到对应镜像文件，已跳过: %v", skipped)
+	}
+	for _, it := range items {
+		log.Printf("[MULTI] 分区 '%s' -> %s (%d bytes) @ offset 0x%X", it.Name, it.Path, it.Size, it.Offset)
+	}
+
+	return task, msg, nil
+}
+
+// findByBaseName 在文件列表中按文件名查找（大小写不敏感）
 func findByBaseName(files []string, name string) string {
 	for _, f := range files {
 		if strings.EqualFold(filepath.Base(f), name) {
@@ -485,139 +890,43 @@ func findByBaseName(files []string, name string) string {
 	return ""
 }
 
-// buildTaskFromExtracted 决定固件包该怎么刷：
-//   - 解压后只有一个 .img/.bin 镜像 -> 视为整盘镜像，直接从设备起始位置写入（跟单文件上传一致）。
-//   - 解压后有多个 .img/.bin 镜像   -> 必须有 parameter.txt 提供分区表；
-//     再尝试用 config.cfg 里的 name->path 映射为每个分区找到对应镜像，
-//     找不到的分区用文件名做兜底猜测（<part_name>.img 等）。
-func buildTaskFromExtracted(files []string, extractDir, target string) (*FlashTask, string, error) {
-	var imageFiles []string
-	for _, f := range files {
-		ext := strings.ToLower(filepath.Ext(f))
-		if ext == ".img" || ext == ".bin" {
-			imageFiles = append(imageFiles, f)
+// findByBaseNames 在文件列表中按一组候选文件名依次查找（大小写不敏感），返回第一个命中的路径
+func findByBaseNames(files []string, names []string) string {
+	for _, n := range names {
+		if p := findByBaseName(files, n); p != "" {
+			return p
 		}
 	}
-
-	if len(imageFiles) == 0 {
-		return nil, "", fmt.Errorf("固件包中未找到任何 .img/.bin 镜像文件")
-	}
-
-	// ---- 情况一：解压后只有单一镜像 -> 直接整盘刷入 ----
-	if len(imageFiles) == 1 {
-		st, err := os.Stat(imageFiles[0])
-		if err != nil {
-			return nil, "", fmt.Errorf("读取镜像文件失败: %v", err)
-		}
-		task := newTask(target, st.Size())
-		task.Mode = "single"
-		task.Items = []FlashWriteItem{{Name: filepath.Base(imageFiles[0]), Offset: 0, Size: st.Size(), Path: imageFiles[0]}}
-		task.CleanupPaths = []string{extractDir}
-		msg := fmt.Sprintf("固件包内只有单一镜像 %s (%d MB)，将整盘写入 %s ...",
-			filepath.Base(imageFiles[0]), st.Size()/1024/1024, target)
-		return task, msg, nil
-	}
-
-	// ---- 情况二：多个文件 -> 按 parameter.txt 的分区表 + config.cfg 的镜像映射分别写入 ----
-	paramPath := findByBaseName(files, "parameter.txt")
-	if paramPath == "" {
-		return nil, "", fmt.Errorf("固件包内有 %d 个镜像文件，但未找到 parameter.txt，无法确定各镜像应写入哪个分区", len(imageFiles))
-	}
-	partitions, err := parseParameterFile(paramPath)
-	if err != nil {
-		return nil, "", fmt.Errorf("解析 parameter.txt 失败: %v", err)
-	}
-
-	var cfgItems []CfgImageItem
-	cfgPath := findByBaseName(files, "config.cfg")
-	if cfgPath != "" {
-		if isConfigCfg(cfgPath) {
-			cfgItems, err = parseConfigCfg(cfgPath)
-			if err != nil {
-				log.Printf("解析 config.cfg 失败，将回退到按文件名猜测镜像: %v", err)
-				cfgItems = nil
-			}
-		} else {
-			log.Printf("config.cfg 内容不是有效的 CFG 格式，将回退到按文件名猜测镜像")
-		}
-	} else {
-		log.Printf("固件包内未找到 config.cfg，将按文件名猜测每个分区对应的镜像")
-	}
-
-	var items []FlashWriteItem
-	var matchedNames []string
-	var skipped []string
-
-	for _, p := range partitions {
-		var imgPath string
-		var ok bool
-
-		if cfgItems != nil {
-			imgPath, ok = findImageInCfg(cfgItems, files, extractDir, p.Name)
-		}
-		if !ok {
-			imgPath, ok = findImageByGuess(files, p.Name)
-		}
-		if !ok {
-			skipped = append(skipped, p.Name)
-			continue
-		}
-
-		st, err := os.Stat(imgPath)
-		if err != nil {
-			skipped = append(skipped, p.Name)
-			continue
-		}
-		if p.Size != 0xFFFFFFFF {
-			partBytes := int64(p.Size) * 512
-			if st.Size() > partBytes {
-				log.Printf("警告: 分区 '%s' 镜像 %s (%d 字节) 大于分区容量 (%d 字节)，仍尝试写入",
-					p.Name, imgPath, st.Size(), partBytes)
-			}
-		}
-
-		items = append(items, FlashWriteItem{
-			Name:   p.Name,
-			Offset: int64(p.Offset) * 512,
-			Size:   st.Size(),
-			Path:   imgPath,
-		})
-		matchedNames = append(matchedNames, p.Name)
-	}
-
-	if len(items) == 0 {
-		return nil, "", fmt.Errorf("parameter.txt 中的 %d 个分区均未找到对应镜像文件", len(partitions))
-	}
-
-	var total int64
-	for _, it := range items {
-		total += it.Size
-	}
-
-	task := newTask(target, total)
-	task.Mode = "multi"
-	task.Items = items
-	task.CleanupPaths = []string{extractDir}
-
-	msg := fmt.Sprintf("解析完成: 将写入分区 [%s]", strings.Join(matchedNames, ", "))
-	if len(skipped) > 0 {
-		msg += fmt.Sprintf("；未找到镜像已跳过: [%s]", strings.Join(skipped, ", "))
-	}
-	return task, msg, nil
+	return ""
 }
 
-// doFlash 依次把 task.Items 里的每个文件写到 task.TargetDev 对应的字节偏移处，
-// 并按累计写入字节数 / task.Total 汇报整体进度。单镜像模式下 Items 只有一项(Offset=0)，
-// 效果与原来的"整盘 dd"完全一致。
+// findConfigCfg 在文件列表中查找 RKDevTool 风格的 config.cfg。
+// 优先按常见文件名 "config.cfg" 查找并用魔数校验；若未命中，再遍历全部文件用魔数 "CFG" 识别，
+// 因为不同厂商打包时该文件名可能不同。
+func findConfigCfg(files []string) string {
+	if p := findByBaseName(files, "config.cfg"); p != "" && isConfigCfg(p) {
+		return p
+	}
+	for _, f := range files {
+		if isConfigCfg(f) {
+			return f
+		}
+	}
+	return ""
+}
+
+// doFlash 执行刷写
 func doFlash(task *FlashTask) {
 	defer cleanupTask(task)
 
-	log.Printf("[%s] Flash start: mode=%s, %d item(s) -> %s (%d bytes total)",
+	log.Printf("[%s] Flash start: mode=%s, %d item(s) -> %s (%d bytes)",
 		task.ID, task.Mode, len(task.Items), task.TargetDev, task.Total)
 
 	dst, err := os.OpenFile(task.TargetDev, os.O_WRONLY|os.O_SYNC, 0)
 	if err != nil {
-		updateTask(task.ID, func(t *FlashTask) { t.Status = "error"; t.Error = "打开目标设备失败: " + err.Error() })
+		updateTask(task.ID, func(t *FlashTask) {
+			t.Status = "error"; t.Error = "打开目标设备失败: " + err.Error()
+		})
 		return
 	}
 	defer dst.Close()
@@ -640,12 +949,12 @@ func doFlash(task *FlashTask) {
 			src.Close()
 			updateTask(task.ID, func(t *FlashTask) {
 				t.Status = "error"
-				t.Error = fmt.Sprintf("定位分区 '%s' (offset=%d) 失败: %v", item.Name, item.Offset, err)
+				t.Error = fmt.Sprintf("定位分区 '%s' 失败: %v", item.Name, err)
 			})
 			return
 		}
 
-		log.Printf("[%s] Writing '%s' (%d bytes) @ byte offset %d", task.ID, item.Name, item.Size, item.Offset)
+		log.Printf("[%s] Writing '%s' (%d bytes) @ offset %d", task.ID, item.Name, item.Size, item.Offset)
 
 		for {
 			n, readErr := src.Read(buf)
@@ -654,7 +963,7 @@ func doFlash(task *FlashTask) {
 					src.Close()
 					updateTask(task.ID, func(t *FlashTask) {
 						t.Status = "error"
-						t.Error = fmt.Sprintf("写入分区 '%s' 失败 @ 累计 %d 字节: %v", item.Name, totalWritten, werr)
+						t.Error = fmt.Sprintf("写入 '%s' 失败 @ %d bytes: %v", item.Name, totalWritten, werr)
 					})
 					return
 				}
@@ -697,7 +1006,7 @@ func doFlash(task *FlashTask) {
 			t.Speed = float64(t.Total) / elapsed
 		}
 	})
-	log.Printf("[%s] ✅ Done: %d bytes total, %.1fs, %.1f MB/s",
+	log.Printf("[%s] ✅ Done: %d bytes, %.1fs, %.1f MB/s",
 		task.ID, totalWritten, elapsed, float64(totalWritten)/elapsed/1024/1024)
 }
 
@@ -708,13 +1017,11 @@ func cleanupTask(task *FlashTask) {
 }
 
 // ============ parameter.txt parsing ============
-// 只关心分区表 (mtdparts)，格式: mtdparts=...:SIZE@OFFSET(NAME)[,SIZE@OFFSET(NAME)]*
-// SIZE/OFFSET 都是十六进制扇区数，SIZE 为 "-" 表示占满剩余空间（对应 0xFFFFFFFF）。
 
 type ParamPartition struct {
 	Name   string
-	Offset uint32 // 单位: 扇区 (512 字节)
-	Size   uint32 // 单位: 扇区；0xFFFFFFFF 表示到盘尾（grow）
+	Offset uint32
+	Size   uint32
 }
 
 func parseParameterFile(path string) ([]ParamPartition, error) {
@@ -808,17 +1115,98 @@ func parseHex32(s string) (uint32, error) {
 	return uint32(v), nil
 }
 
-// ============ config.cfg parsing (RKDevTool 固件下载配置) ============
-// 二进制格式：
-//   header(29字节): magic"CFG"(4,第4字节为\0) + gap0(18,未知) + length(1,未知) +
-//                   begin(4,LE,第一条记录的绝对偏移) + itemSize(2,LE,每条记录的真实字节长度)
-//   record: size(2,LE) + name(UTF16LE,40 units) + path(UTF16LE,260 units) +
-//           address(4,LE) + isSelected(1) [+ 记录尾部可能有版本相关的多余字段]
-// 解析时严格按 header 声明的 itemSize 逐条切片，而不是假设固定长度，
-// 这样不同版本 RKDevTool 生成的记录长度不同也不会错位。
+// ============ package-file parsing (Rockchip update.img / afptool 风格) ============
+
+// PackageFileItem 表示 package-file 中的一条镜像条目：名称 -> 固件包内相对路径
+type PackageFileItem struct {
+	Name string
+	Path string
+}
+
+// parsePackageFile 解析 Rockchip package-file。
+//
+// 典型格式（"#" 开头为注释，空行忽略，每行由任意空白分隔为“名称 路径”两列）：
+//
+//	# NAME			PATH
+//	package-file		package-file
+//	parameter		parameter.txt
+//	bootloader		MiniLoaderAll.bin
+//	boot			boot.img
+//	rootfs			rootfs.img
+//
+// 名称对应 parameter.txt 分区表中的分区名，路径是相对于固件包解压目录的相对路径
+// （也可能带有子目录，如 "Image/boot.img"）。
+func parsePackageFile(path string) ([]PackageFileItem, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return parsePackageFileBytes(string(data))
+}
+
+func parsePackageFileBytes(content string) ([]PackageFileItem, error) {
+	var items []PackageFileItem
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		name := strings.TrimPrefix(fields[0], "/")
+		p := strings.ReplaceAll(fields[1], "\\", "/")
+		items = append(items, PackageFileItem{Name: name, Path: p})
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("package-file 内没有解析出任何有效条目")
+	}
+	return items, nil
+}
+
+// findImageInPackage 在 package-file 条目中按分区名查找对应镜像文件的实际路径。
+// partName 可能带有形如 "boot:grow" 的后缀（增长标记等），仅取冒号前的部分用于匹配。
+func findImageInPackage(items []PackageFileItem, files []string, extractDir, partName string) (string, bool) {
+	name := partName
+	if idx := strings.Index(name, ":"); idx >= 0 {
+		name = name[:idx]
+	}
+
+	for _, it := range items {
+		if !strings.EqualFold(it.Name, name) {
+			continue
+		}
+		if it.Path == "" {
+			return "", false
+		}
+
+		p := it.Path
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(extractDir, p)
+		}
+		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
+			return p, true
+		}
+
+		// 路径本身可能因不同打包工具而与解压目录结构不完全一致，回退按文件名匹配
+		base := filepath.Base(it.Path)
+		for _, f := range files {
+			if strings.EqualFold(filepath.Base(f), base) {
+				return f, true
+			}
+		}
+		log.Printf("findImageInPackage: '%s' -> '%s' 文件不存在", partName, it.Path)
+		return "", false
+	}
+	return "", false
+}
+
+// ============ config.cfg parsing (RKDevTool 风格) ============
 
 const (
-	cfgHeaderSize  = 29 // 4 + 18 + 1 + 4 + 2
+	cfgHeaderSize  = 29
 	cfgNameUnits   = 40
 	cfgPathUnits   = 260
 	cfgMinItemSize = 2 + cfgNameUnits*2 + cfgPathUnits*2 + 4 + 1
@@ -827,12 +1215,11 @@ const (
 
 type CfgImageItem struct {
 	Name     string
-	Path     string // 已把 '\' 换成 '/'
-	Address  uint32 // 烧录地址；0xFFFFFFFF 表示 AUTO
+	Path     string
+	Address  uint32
 	Selected bool
 }
 
-// isConfigCfg 只看 magic，快速判断一个文件是不是 config.cfg。
 func isConfigCfg(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -860,24 +1247,22 @@ func parseConfigCfg(path string) ([]CfgImageItem, error) {
 	itemSize := binary.LittleEndian.Uint16(data[27:29])
 
 	if itemSize < cfgMinItemSize {
-		return nil, fmt.Errorf("header.itemSize=%d 过小（至少需要 %d 字节），文件可能已损坏或版本不同",
-			itemSize, cfgMinItemSize)
+		return nil, fmt.Errorf("itemSize=%d 过小（至少 %d）", itemSize, cfgMinItemSize)
 	}
 	if int(begin) < cfgHeaderSize || int(begin) > len(data) {
-		return nil, fmt.Errorf("header.begin=0x%X 超出文件范围（文件大小=%d）", begin, len(data))
+		return nil, fmt.Errorf("begin=0x%X 超出文件范围", begin)
 	}
 
 	payload := len(data) - int(begin)
 	entries := payload / int(itemSize)
 	if remainder := payload % int(itemSize); remainder != 0 {
-		log.Printf("parseConfigCfg: 警告，末尾多出 %d 字节，不是 itemSize 的整数倍", remainder)
+		log.Printf("parseConfigCfg: 末尾多出 %d 字节", remainder)
 	}
 
 	items := make([]CfgImageItem, 0, entries)
 	off := int(begin)
 	for i := 0; i < entries; i++ {
 		if off+int(itemSize) > len(data) {
-			log.Printf("parseConfigCfg: item %d 越界，提前结束", i)
 			break
 		}
 		rec := data[off : off+int(itemSize)]
@@ -885,8 +1270,7 @@ func parseConfigCfg(path string) ([]CfgImageItem, error) {
 
 		selfSize := binary.LittleEndian.Uint16(rec[0:2])
 		if selfSize != itemSize {
-			log.Printf("parseConfigCfg: 警告，item %d 自身 size(%d) 与 header.itemSize(%d) 不一致",
-				i, selfSize, itemSize)
+			log.Printf("parseConfigCfg: item %d size(%d) != header.itemSize(%d)", i, selfSize, itemSize)
 		}
 
 		nameBytes := rec[2 : 2+cfgNameUnits*2]
@@ -903,8 +1287,6 @@ func parseConfigCfg(path string) ([]CfgImageItem, error) {
 	return items, nil
 }
 
-// utf16leToString 把 UTF16LE 字节数组（以 0x0000 结尾或读满整个切片）转成 Go string，
-// unicode/utf16.Decode 自动处理代理对(surrogate pair)。
 func utf16leToString(b []byte) string {
 	u16 := make([]uint16, 0, len(b)/2)
 	for i := 0; i+1 < len(b); i += 2 {
@@ -917,10 +1299,6 @@ func utf16leToString(b []byte) string {
 	return string(utf16.Decode(u16))
 }
 
-// findImageInCfg 在 config.cfg 的镜像列表里按分区名查找对应镜像路径。
-// partName 允许带 "boot:bootable" 这种 parameter.txt 风格的后缀，会自动截断到冒号前比较。
-// 先按 config.cfg 里写的路径（相对 extractDir）解析；解析不到时按文件名在整个
-// 压缩包范围内再找一次，兼容路径分隔符/大小写差异。
 func findImageInCfg(items []CfgImageItem, files []string, extractDir, partName string) (string, bool) {
 	name := partName
 	if idx := strings.Index(name, ":"); idx >= 0 {
@@ -932,7 +1310,7 @@ func findImageInCfg(items []CfgImageItem, files []string, extractDir, partName s
 			continue
 		}
 		if !it.Selected {
-			log.Printf("findImageInCfg: '%s' 在 config.cfg 中找到但未勾选烧录，跳过", partName)
+			log.Printf("findImageInCfg: '%s' 未勾选，跳过", partName)
 			return "", false
 		}
 		if it.Path == "" {
@@ -953,24 +1331,22 @@ func findImageInCfg(items []CfgImageItem, files []string, extractDir, partName s
 				return f, true
 			}
 		}
-		log.Printf("findImageInCfg: '%s' -> '%s' 但文件不存在", partName, it.Path)
+		log.Printf("findImageInCfg: '%s' -> '%s' 文件不存在", partName, it.Path)
 		return "", false
 	}
 	return "", false
 }
 
-// findImageByGuess 在没有 config.cfg（或 cfg 里查不到）时，按常见命名规则猜测镜像文件：
-// <name>.img / <name>.raw / <name> / _<name>.img，大小写不敏感，在整个压缩包范围内查找。
 func findImageByGuess(files []string, partName string) (string, bool) {
 	name := partName
 	if idx := strings.Index(name, ":"); idx >= 0 {
 		name = name[:idx]
 	}
-	candidateNames := []string{name, name + ".img", name + ".raw", "_" + name + ".img"}
+	candidates := []string{name, name + ".img", name + ".raw", "_" + name + ".img"}
 
 	for _, f := range files {
 		base := filepath.Base(f)
-		for _, c := range candidateNames {
+		for _, c := range candidates {
 			if strings.EqualFold(base, c) {
 				return f, true
 			}
@@ -1020,31 +1396,27 @@ func getFilteredDevices() []BlockDevice {
 	cmd := exec.Command("lsblk", "-bdnJ", "-o", "NAME,SIZE,TYPE,MODEL,TRAN")
 	output, err := cmd.Output()
 	if err != nil {
-		log.Printf("lsblk command failed: %v", err)
+		log.Printf("lsblk failed: %v", err)
 		return getMockDevices()
 	}
 
 	var data LsblkOutput
 	if err := json.Unmarshal(output, &data); err != nil {
-		log.Printf("json unmarshal failed: %v, raw output: %s", err, string(output))
+		log.Printf("json unmarshal failed: %v", err)
 		return getMockDevices()
 	}
 
 	var result []BlockDevice
 	for _, d := range data.BlockDevices {
-		// 过滤掉 loop, ram, dm-, sr, zram 等虚拟/特殊设备
 		if strings.HasPrefix(d.Name, "loop") || strings.HasPrefix(d.Name, "ram") ||
 			strings.HasPrefix(d.Name, "dm-") || strings.HasPrefix(d.Name, "sr") ||
 			strings.HasPrefix(d.Name, "zram") {
 			continue
 		}
-
-		// 只保留 sd 和 nvme 设备
 		if !strings.HasPrefix(d.Name, "sd") && !strings.HasPrefix(d.Name, "nvme") {
 			continue
 		}
 
-		// 安全获取 tran 值（可能是 nil）
 		tran := ""
 		if d.Tran != nil {
 			tran = *d.Tran
@@ -1059,35 +1431,26 @@ func getFilteredDevices() []BlockDevice {
 			dt = "SATA/SCSI"
 		}
 
-		// 【关键修复】json.Number 兼容数字和字符串，转成 int64
 		sizeBytes, _ := d.Size.Int64()
-
-		// 安全获取 model 值（可能是 nil）
 		model := ""
 		if d.Model != nil {
 			model = *d.Model
 		}
 
 		result = append(result, BlockDevice{
-			Name:  d.Name,
-			Path:  "/dev/" + d.Name,
-			Type:  dt,
-			Size:  formatBytes(sizeBytes),
-			Model: model,
+			Name: d.Name, Path: "/dev/" + d.Name,
+			Type: dt, Size: formatBytes(sizeBytes), Model: model,
 		})
 	}
 
 	if len(result) == 0 {
-		log.Println("No valid devices found, returning mock data")
 		return getMockDevices()
 	}
-
 	return result
 }
 
 func getMockDevices() []BlockDevice {
-	return []BlockDevice{
-	}
+	return []BlockDevice{}
 }
 
 func formatBytes(b int64) string {
@@ -1102,3 +1465,4 @@ func formatBytes(b int64) string {
 	}
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "kMGTPE"[exp])
 }
+
