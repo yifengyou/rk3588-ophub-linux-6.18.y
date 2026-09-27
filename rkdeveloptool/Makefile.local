@@ -1,0 +1,27 @@
+# Makefile for rklocaltool - standalone local disk tool (no libusb dependency)
+# Build:  make -f Makefile.local
+# Clean:  make -f Makefile.local clean
+
+CXX      ?= aarch64-linux-gnu-g++
+STRIP    ?= aarch64-linux-gnu-strip
+CXXFLAGS ?= -Wall -Wextra -Wreturn-type -fno-strict-aliasing -O2 -D_FILE_OFFSET_BITS=64 -D_LARGE_FILE
+LDFLAGS  ?= -static
+
+TARGET = rklocaltool
+SOURCES = RKLocalTool.cpp
+
+OBJS = $(SOURCES:.cpp=.o)
+
+.PHONY: all clean
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
+	$(STRIP) $@
+
+%.o: %.cpp RKLocalTool.h
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+clean:
+	rm -f $(OBJS) $(TARGET)
