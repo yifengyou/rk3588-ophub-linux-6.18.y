@@ -20,8 +20,7 @@ openssh-client
 openssh-client-common
 openssh-server
 openssh-sftp-server
-openvswitch
-openvswitch-openrc
 pciutils
+sgdisk
 util-linux
 xfsprogs
