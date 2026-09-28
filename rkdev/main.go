@@ -53,6 +53,9 @@ const paramSectorSize = 512
 // GPT 管理，仍按原始偏移直接写入。
 const gptReservedSectors = 34
 
+// gptBackupSectors 是磁盘尾部预留给备份 GPT（备份分区表数组 32 扇区 + 备份头 1 扇区）的扇区数。
+const gptBackupSectors = 33
+
 // ============ JSON Helpers ============
 
 func jsonOK(w http.ResponseWriter, data interface{}) {
@@ -949,7 +952,8 @@ func doFlash(task *FlashTask) {
 	dst, err := os.OpenFile(task.TargetDev, os.O_WRONLY|os.O_SYNC, 0)
 	if err != nil {
 		updateTask(task.ID, func(t *FlashTask) {
-			t.Status = "error"; t.Error = "打开目标设备失败: " + err.Error()
+			t.Status = "error"
+			t.Error = "打开目标设备失败: " + err.Error()
 		})
 		return
 	}
@@ -1040,7 +1044,7 @@ func cleanupTask(task *FlashTask) {
 	}
 }
 
-// ============ GPT Partition Table Rebuild ============
+// ============ GPT Partition Table Rebuild (sgdisk) ============
 
 // blockDeviceSectors 读取目标块设备的实际容量（单位：512 字节扇区），通过
 // /sys/class/block/<dev>/size 获取，避免依赖外部工具解析。
@@ -1058,23 +1062,28 @@ func blockDeviceSectors(target string) (uint64, error) {
 }
 
 // applyGPTPartitionTable 依据 parameter.txt 中的分区表，在目标设备上按磁盘当前实际容量
-// 重新创建一份 GPT 分区表（通过 sfdisk 完成，相比 sgdisk/gptfdisk 体积小很多，
-// util-linux 自带，一般无需额外安装）。
+// 重新创建一份 GPT 分区表（通过 sgdisk 完成）。
 //
 // 这是多文件刷写（package-file/config.cfg + parameter.txt）流程的必要前置步骤：如果不重建
 // 分区表，直接按偏移量写入镜像会导致设备上残留旧的、与当前磁盘容量不匹配的 GPT
 // （典型症状如 fdisk 报 "GPT PMBR size mismatch"、"backup GPT table is corrupt"、
 // "backup GPT table is not on the end of the device"），系统重启后可能无法正确识别分区。
 //
+// 流程：
+//  1. sgdisk --zap-all：销毁设备上现有的 GPT / MBR 数据结构（即使已损坏也能处理）；
+//  2. sgdisk -o -a 1 -n ... -c ... -u ...：新建空 GPT（-o），关闭对齐（-a 1，保证分区起始
+//     扇区与 parameter.txt 完全一致），并逐个创建分区、设置名称及（若 parameter.txt 中通过
+//     "uuid:<分区名>=<UUID>" 指定）强制的 PARTUUID。
+//
 // 分区表项的起止扇区直接取自 parameter.txt（单位为 512 字节扇区）；size 为 0xFFFFFFFF
-// （parameter.txt 中以 "-" 表示，通常是最后一个分区，如 rootfs/userdata）的分区在生成的
-// sfdisk 脚本中省略 size 字段，由 sfdisk 自动扩展到磁盘末尾并为备份 GPT 表预留空间。
-// 起始扇区落在 GPT 保留区（前 gptReservedSectors 个扇区，含保护性 MBR、主 GPT 头及分区表
-// 数组）内的分区不纳入 GPT 管理，仍按原始偏移直接写入（doFlash 中的逐项写入逻辑本身不受影响）。
+// （parameter.txt 中以 "-" 表示，通常是最后一个分区，如 rootfs/userdata）的分区，结束扇区
+// 传 0，由 sgdisk 自动延伸到最后一个可用扇区（并为备份 GPT 预留空间）。
+// 起始扇区落在 GPT 保留区（前 gptReservedSectors 个扇区）内的分区不纳入 GPT 管理，仍按原始
+// 偏移直接写入（doFlash 中的逐项写入逻辑本身不受影响）。
 func applyGPTPartitionTable(target string, partitions []ParamPartition) error {
-	sfdiskPath, err := exec.LookPath("sfdisk")
+	sgdiskPath, err := exec.LookPath("sgdisk")
 	if err != nil {
-		return fmt.Errorf("未找到 sfdisk 工具，无法重建 GPT 分区表（util-linux 通常自带，请确认已安装）: %w", err)
+		return fmt.Errorf("未找到 sgdisk 工具，无法重建 GPT 分区表（请安装 gdisk / gptfdisk 软件包）: %w", err)
 	}
 
 	diskSectors, err := blockDeviceSectors(target)
@@ -1085,46 +1094,51 @@ func applyGPTPartitionTable(target string, partitions []ParamPartition) error {
 		return fmt.Errorf("无法获取 %s 的磁盘容量", target)
 	}
 
-	script, created := buildSfdiskScript(partitions, diskSectors)
+	args, created := buildSgdiskArgs(partitions, diskSectors)
 	if len(created) == 0 {
 		return fmt.Errorf("parameter.txt 中没有可用于创建 GPT 分区的有效分区项")
 	}
 
-	// --wipe always / --wipe-partitions always：无需交互确认即可清除设备上残留的旧文件系统
-	// 签名及旧分区表（包括与当前磁盘容量不匹配、已损坏的备份 GPT），配合 "label: gpt" 脚本
-	// 头，整块设备会被重新初始化为一份全新的、与磁盘实际容量匹配的 GPT。
-	// --force 用于跳过 sfdisk 在检测到旧分区表异常（如本例中损坏的备份 GPT）时的交互式确认。
-	cmd := exec.Command(sfdiskPath, "--force", "--wipe", "always", "--wipe-partitions", "always", target)
-	cmd.Stdin = strings.NewReader(script)
-	out, err := cmd.CombinedOutput()
+	// 第一步：清除现有的 GPT / MBR。对已损坏的分区表 sgdisk 可能给出警告甚至非零退出码，
+	// 此处仅记录日志，不视为致命错误——后续带 -o 的命令会再次完整重建分区表。
+	zapOut, zapErr := exec.Command(sgdiskPath, "--zap-all", target).CombinedOutput()
+	if zapErr != nil {
+		log.Printf("[GPT] sgdisk --zap-all %s 返回错误（忽略，继续重建）: %v, output: %s", target, zapErr, string(zapOut))
+	}
+
+	// 第二步：新建 GPT 并创建全部分区
+	fullArgs := append([]string{"-o", "-a", "1"}, args...)
+	fullArgs = append(fullArgs, target)
+	out, err := exec.Command(sgdiskPath, fullArgs...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("sfdisk 写入分区表失败: %v, output: %s\n脚本内容:\n%s", err, string(out), script)
+		return fmt.Errorf("sgdisk 写入分区表失败: %v, output: %s\n命令: sgdisk %s", err, string(out), strings.Join(fullArgs, " "))
 	}
 
 	rereadPartitionTable(target)
 
-	log.Printf("[GPT] 已通过 sfdisk 在 %s 上重建 GPT 分区表，共 %d 个分区: %v，磁盘容量 %d 扇区\nsfdisk 输出:\n%s",
-		target, len(created), created, diskSectors, string(out))
+	log.Printf("[GPT] 已通过 sgdisk 在 %s 上重建 GPT 分区表，共 %d 个分区: %v，磁盘容量 %d 扇区\n命令: sgdisk %s\nsgdisk 输出:\n%s",
+		target, len(created), created, diskSectors, strings.Join(fullArgs, " "), string(out))
 	return nil
 }
 
-// buildSfdiskScript 依据 parameter.txt 分区表及磁盘实际容量，生成 sfdisk 可识别的脚本
-// （"label: gpt" 格式，通过 stdin 传给 sfdisk），并返回脚本内容及实际写入脚本中的分区名列表。
+// buildSgdiskArgs 依据 parameter.txt 分区表及磁盘实际容量，生成 sgdisk 的分区相关参数
+// （-n / -c / -u），并返回实际创建的分区名列表。分区编号按创建顺序从 1 开始连续编号。
 //
-// 每个分区一行，形如：
+// 每个分区生成形如：
 //
-//	start=8192, size=737280, name="boot"
-//	start=835584, name="rootfs"
-//
-// 省略 size 字段表示该分区一直占用到下一分区起始处或磁盘末尾，用于 parameter.txt 中
-// size=0xFFFFFFFF（即 "-"）的分区，以及声明大小超出磁盘剩余空间的分区（此时按磁盘实际
-// 容量截断，同样省略 size 交给 sfdisk 处理，避免脚本本身请求了一个超出磁盘范围的分区）。
-func buildSfdiskScript(partitions []ParamPartition, diskSectors uint64) (string, []string) {
-	var b strings.Builder
-	b.WriteString("label: gpt\n")
-	b.WriteString("unit: sectors\n\n")
-
+//	-n 1:64:6207            起始扇区:结束扇区（结束扇区为 0 表示延伸到最后一个可用扇区）
+//	-c 1:uboot              分区名称
+//	-u 1:614e0000-...       （可选）强制指定分区 GUID，即内核命令行中的 PARTUUID
+func buildSgdiskArgs(partitions []ParamPartition, diskSectors uint64) ([]string, []string) {
+	var args []string
 	var created []string
+
+	// GPT 最后一个可用扇区（备份 GPT 位于磁盘末尾 gptBackupSectors 个扇区内）
+	var lastUsable uint64
+	if diskSectors > gptBackupSectors+1 {
+		lastUsable = diskSectors - gptBackupSectors - 1
+	}
+
 	for _, p := range partitions {
 		name := p.Name
 		if idx := strings.Index(name, ":"); idx >= 0 {
@@ -1138,27 +1152,59 @@ func buildSfdiskScript(partitions []ParamPartition, diskSectors uint64) (string,
 				name, p.Offset, gptReservedSectors)
 			continue
 		}
-		if uint64(p.Offset) >= diskSectors {
-			log.Printf("[GPT] 分区 '%s' 起始扇区 %d 超出磁盘容量 %d 扇区，跳过", name, p.Offset, diskSectors)
+		if uint64(p.Offset) > lastUsable {
+			log.Printf("[GPT] 分区 '%s' 起始扇区 %d 超出磁盘可用范围（最后可用扇区 %d），跳过", name, p.Offset, lastUsable)
 			continue
 		}
 
-		escapedName := strings.ReplaceAll(name, `"`, `\"`)
-		includeSize := p.Size != 0xFFFFFFFF && uint64(p.Offset)+uint64(p.Size) <= diskSectors
-
-		var line string
-		if includeSize {
-			line = fmt.Sprintf("start=%d, size=%d, name=\"%s\"", p.Offset, p.Size, escapedName)
-		} else {
-			line = fmt.Sprintf("start=%d, name=\"%s\"", p.Offset, escapedName)
+		// 结束扇区：size 为 "-" 或超出磁盘可用范围时传 0，让 sgdisk 自动延伸到最后可用扇区
+		var end uint64
+		if p.Size != 0xFFFFFFFF && p.Size != 0 {
+			e := uint64(p.Offset) + uint64(p.Size) - 1
+			if e <= lastUsable {
+				end = e
+			}
 		}
 
-		b.WriteString(line)
-		b.WriteString("\n")
+		num := len(created) + 1
+		args = append(args,
+			"-n", fmt.Sprintf("%d:%d:%d", num, p.Offset, end),
+			"-c", fmt.Sprintf("%d:%s", num, name),
+		)
+
+		if p.UUID != "" {
+			if isValidGUID(p.UUID) {
+				args = append(args, "-u", fmt.Sprintf("%d:%s", num, p.UUID))
+				log.Printf("[GPT] 分区 '%s' (#%d) 强制 PARTUUID = %s", name, num, p.UUID)
+			} else {
+				log.Printf("[GPT] 分区 '%s' 的 UUID %q 格式非法，忽略，将使用随机 PARTUUID", name, p.UUID)
+			}
+		}
+
 		created = append(created, name)
 	}
 
-	return b.String(), created
+	return args, created
+}
+
+// isValidGUID 校验形如 xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx 的 GUID 字符串
+func isValidGUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // rereadPartitionTable 通知内核重新读取目标设备的分区表，优先使用 partprobe，
@@ -1186,6 +1232,7 @@ type ParamPartition struct {
 	Name   string
 	Offset uint32
 	Size   uint32
+	UUID   string // 来自 parameter.txt 中 "uuid:<分区名>=<UUID>" 行，为空表示不强制
 }
 
 func parseParameterFile(path string) ([]ParamPartition, error) {
@@ -1196,14 +1243,50 @@ func parseParameterFile(path string) ([]ParamPartition, error) {
 	return parseParameterBytes(string(data))
 }
 
+// partBaseName 返回分区名去掉 ":grow" 等冒号后缀后的部分
+func partBaseName(name string) string {
+	if idx := strings.Index(name, ":"); idx >= 0 {
+		return name[:idx]
+	}
+	return name
+}
+
+// parseUUIDLine 解析形如 "uuid:rootfs=614e0000-0000-4b53-8000-1d28000054a9" 的行，
+// 返回分区名与 UUID。不是 uuid 行时 ok 为 false。
+func parseUUIDLine(line string) (name, uuid string, ok bool) {
+	if len(line) < 5 || !strings.EqualFold(line[:5], "uuid:") {
+		return "", "", false
+	}
+	rest := line[5:]
+	eq := strings.Index(rest, "=")
+	if eq < 0 {
+		return "", "", false
+	}
+	name = strings.TrimSpace(rest[:eq])
+	uuid = strings.TrimSpace(rest[eq+1:])
+	if name == "" || uuid == "" {
+		return "", "", false
+	}
+	return name, uuid, true
+}
+
 func parseParameterBytes(content string) ([]ParamPartition, error) {
 	var result []ParamPartition
+	uuidMap := make(map[string]string) // 分区名(小写) -> UUID
+
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+
+		// uuid:<分区名>=<UUID> 行：记录需要强制指定的 PARTUUID
+		if n, u, ok := parseUUIDLine(line); ok {
+			uuidMap[strings.ToLower(partBaseName(n))] = u
+			continue
+		}
+
 		idx := strings.Index(line, "mtdparts")
 		if idx < 0 {
 			continue
@@ -1222,6 +1305,22 @@ func parseParameterBytes(content string) ([]ParamPartition, error) {
 	if len(result) == 0 {
 		return nil, fmt.Errorf("未在文件中找到 mtdparts 分区信息")
 	}
+
+	// 将 uuid 映射应用到对应分区
+	used := make(map[string]bool)
+	for i := range result {
+		key := strings.ToLower(partBaseName(result[i].Name))
+		if u, ok := uuidMap[key]; ok {
+			result[i].UUID = u
+			used[key] = true
+		}
+	}
+	for k, u := range uuidMap {
+		if !used[k] {
+			log.Printf("parseParameterBytes: uuid:%s=%s 没有对应的分区，已忽略", k, u)
+		}
+	}
+
 	return result, nil
 }
 
