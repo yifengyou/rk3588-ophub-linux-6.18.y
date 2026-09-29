@@ -25,6 +25,7 @@
 
         .card { background: #fff; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.05); text-align: center; }
         .card h1 { color: #2c5aa0; font-size: 32px; margin-bottom: 25px; }
+        .ver-tag { font-size: 12px; font-weight: 600; color: #5c7ebf; background: #eef2fa; border: 1px solid #d4dfee; padding: 2px 10px; border-radius: 12px; vertical-align: middle; margin-left: 6px; letter-spacing: .5px; }
         .form-group { margin: 20px 0; display: flex; justify-content: center; align-items: center; gap: 10px; flex-wrap: wrap; }
         select, input[type="file"], button { padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
         button.primary { background: #2c5aa0; color: #fff; border: none; cursor: pointer; }
@@ -63,9 +64,50 @@
         }
         .btn-term-reset:hover { background: #d9534f; color: #fff; }
 
+        .adv-toggle { text-align: right; margin-top: 10px; }
+        .adv-toggle label { font-size: 14px; color: #555; cursor: pointer; user-select: none; }
+        .adv-toggle input { margin-right: 5px; cursor: pointer; }
+
+        .adv-bottom { display: none; }
+        #flash-panel.advanced { max-width: 100%; width: 95%; }
+        #flash-panel.advanced .adv-layout { display: flex; flex-direction: column; gap: 20px; }
+        #flash-panel.advanced .adv-top { width: 100%; }
+        #flash-panel.advanced .adv-bottom { width: 100%; display: flex; flex-direction: column; }
+
+        .log-panel { display: none; background: #1e1e1e; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.15); overflow: hidden; height: 400px; flex-direction: column; }
+        .log-panel.visible { display: flex; }
+
+        .log-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #2d2d2d; color: #ccc; font-size: 13px; font-weight: bold; }
+        .log-header span { white-space: nowrap; }
+        .log-actions { display: flex; gap: 6px; }
+        .log-actions button { padding: 4px 10px; font-size: 12px; border-radius: 3px; cursor: pointer; border: 1px solid #555; background: #3a3a3a; color: #ddd; transition: all .15s; }
+        .log-actions button:hover { background: #555; }
+        .log-actions .btn-clear { border-color: #d9534f; color: #d9534f; }
+        .log-actions .btn-clear:hover { background: #d9534f; color: #fff; }
+        .log-actions .btn-export { border-color: #5bc0de; color: #5bc0de; }
+        .log-actions .btn-export:hover { background: #5bc0de; color: #fff; }
+
+        .log-body { flex: 1; overflow-y: auto; padding: 8px 12px; font-family: "Cascadia Code", "Fira Code", Menlo, Monaco, monospace; font-size: 12px; line-height: 1.6; color: #d4d4d4; }
+        .log-body::-webkit-scrollbar { width: 6px; }
+        .log-body::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+        .log-line { white-space: pre-wrap; word-break: break-all; }
+        .log-line .log-ts { color: #6a9955; margin-right: 6px; }
+        .log-line.log-info { color: #569cd6; }
+        .log-line.log-success { color: #4ec9b0; }
+        .log-line.log-error { color: #f44747; }
+        .log-line.log-warn { color: #dcdcaa; }
+        .log-line.log-data { color: #d4d4d4; }
+
         #reboot-overlay { display: none; position: fixed; inset: 0; background: rgba(255,255,255,.92); z-index: 9999; flex-direction: column; justify-content: center; align-items: center; }
         .spinner { width: 50px; height: 50px; border: 5px solid #f3f3f3; border-top-color: #2c5aa0; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        .footer { width: 100%; text-align: center; padding: 20px 0 30px; margin-top: auto; }
+        .footer-line { display: inline-flex; align-items: center; gap: 8px; color: #aaa; font-size: 13px; }
+        .footer-line .dot { width: 3px; height: 3px; background: #ccc; border-radius: 50%; }
+        .footer-line a { color: #5c7ebf; text-decoration: none; transition: color .2s; }
+        .footer-line a:hover { color: #2c5aa0; text-decoration: underline; }
+        .footer-line .heart { color: #d9534f; font-size: 11px; }
     </style>
 </head>
 <body>
@@ -85,45 +127,64 @@
 </div>
 
 <div id="flash-panel" class="panel active">
-    <div class="card">
-        <h1>彼度云G98/Z98固件更新助手</h1>
-        <p>选择目标存储设备 (U盘、SATA盘、M2 NVME盘)，然后选择固件文件进行刷写。</p>
-        <p>支持 <strong>.img / .bin</strong> 固件及 <strong>.img.gz / .bin.gz</strong> 压缩包（上传时自动解压）。</p>
+    <div class="adv-layout">
+        <div class="adv-top">
+            <div class="card">
+                <h1>彼度云G98/Z98固件更新助手 <span class="ver-tag">v{{.BuildTime}}</span></h1>
+                <p>选择目标存储设备 (U盘、SATA盘、M2 NVME盘)，然后选择固件文件进行刷写。</p>
+                <p>支持 <strong>.img / .bin</strong> 固件及 <strong>.img.gz / .bin.gz</strong> 压缩包（上传时自动解压）。</p>
 
-        <div class="form-group">
-            <label for="device-select"><strong>目标设备:</strong></label>
-            <select id="device-select"><option value="">-- 请点击刷新加载设备 --</option></select>
-            <button type="button" class="refresh-btn" onclick="loadDevices()">🔄 刷新</button>
-        </div>
+                <div class="form-group">
+                    <label for="device-select"><strong>目标设备:</strong></label>
+                    <select id="device-select"><option value="">-- 请点击刷新加载设备 --</option></select>
+                    <button type="button" class="refresh-btn" onclick="loadDevices()">🔄 刷新</button>
+                </div>
 
-        <form id="upload-form" class="form-group" onsubmit="handleUpload(event)">
-            <input type="file" name="firmware" id="firmware-file" accept=".img,.bin,.gz,.rar,.bz2,.bz" required>
-            <button type="submit" class="primary" id="btn-flash">⚡ 开始刷写</button>
-        </form>
+                <form id="upload-form" class="form-group" onsubmit="handleUpload(event)">
+                    <input type="file" name="firmware" id="firmware-file" accept=".img,.bin,.gz,.rar,.bz2,.bz" required>
+                    <button type="submit" class="primary" id="btn-flash">⚡ 开始刷写</button>
+                </form>
 
-        <div class="progress-container" id="progress-container">
-            <div style="margin-bottom:8px;font-weight:bold;">刷写进度 <span class="status-badge" id="status-badge"></span></div>
-            <div class="progress-bar-outer">
-                <div class="progress-bar-inner" id="progress-bar"></div>
-                <div class="progress-text" id="progress-percent">0%</div>
+                <div class="progress-container" id="progress-container">
+                    <div style="margin-bottom:8px;font-weight:bold;">刷写进度 <span class="status-badge" id="status-badge"></span></div>
+                    <div class="progress-bar-outer">
+                        <div class="progress-bar-inner" id="progress-bar"></div>
+                        <div class="progress-text" id="progress-percent">0%</div>
+                    </div>
+                    <div class="progress-details">
+                        <span id="progress-written">已写入: 0 B</span>
+                        <span id="progress-total">总大小: 0 B</span>
+                        <span id="progress-speed">速度: -- MB/s</span>
+                    </div>
+                </div>
+
+                <div id="result-area"></div>
+
+                <div class="warning-box">
+                    <h3>⚠️ 高危操作注意</h3>
+                    <ul>
+                        <li><strong>过滤规则</strong>：仅显示 U盘、SATA盘、M2 NVME 设备。</li>
+                        <li><strong>文件类型</strong>：仅支持 .img / .bin 固件及 .img.gz / .bin.gz 压缩包（gzip 自动解压），其他类型将被拒绝。</li>
+                        <li><strong>数据丢失风险</strong>：刷写操作将覆盖目标设备上的所有数据！</li>
+                        <li><strong>写入方式</strong>：文件先暂存至 /tmp/，再以 4MB 块逐块写入 (等效 dd bs=4M oflag=sync)。</li>
+                    </ul>
+                </div>
+                <div class="adv-toggle">
+                    <label><input type="checkbox" id="adv-mode-check" onchange="toggleAdvancedMode()"> 日志详情</label>
+                </div>
             </div>
-            <div class="progress-details">
-                <span id="progress-written">已写入: 0 B</span>
-                <span id="progress-total">总大小: 0 B</span>
-                <span id="progress-speed">速度: -- MB/s</span>
-            </div>
         </div>
-
-        <div id="result-area"></div>
-
-        <div class="warning-box">
-            <h3>⚠️ 高危操作注意</h3>
-            <ul>
-                <li><strong>过滤规则</strong>：仅显示 U盘、SATA盘、M2 NVME 设备。</li>
-                <li><strong>文件类型</strong>：仅支持 .img / .bin 固件及 .img.gz / .bin.gz 压缩包（gzip 自动解压），其他类型将被拒绝。</li>
-                <li><strong>数据丢失风险</strong>：刷写操作将覆盖目标设备上的所有数据！</li>
-                <li><strong>写入方式</strong>：文件先暂存至 /tmp/，再以 4MB 块逐块写入 (等效 dd bs=4M oflag=sync)。</li>
-            </ul>
+        <div class="adv-bottom">
+            <div class="log-panel" id="log-panel">
+                <div class="log-header">
+                    <span id="log-count">日志 (0/10000)</span>
+                    <div class="log-actions">
+                        <button type="button" class="btn-export" onclick="exportLog()">📥 导出</button>
+                        <button type="button" class="btn-clear" onclick="clearLog()">🗑 清空</button>
+                    </div>
+                </div>
+                <div class="log-body" id="log-body"></div>
+            </div>
         </div>
     </div>
 </div>
@@ -133,6 +194,16 @@
         <button type="button" class="btn-term-reset" onclick="resetTerminal()">	✨ 复位终端</button>
     </div>
     <div id="terminal-container"></div>
+</div>
+
+<div class="footer">
+    <div class="footer-line">
+        <span>Copyright</span>
+        <span class="dot"></span>
+        <a href="https://github.com/yifengyou" target="_blank">github/yifengyou</a>
+        <span class="dot"></span>
+        <span>Built with <span class="heart">&#9829;</span></span>
+    </div>
 </div>
 
 <script>
@@ -274,6 +345,78 @@
         termWs.send(buf);
     }
 
+    // ==================== Advanced Mode & Log ====================
+    const LOG_MAX_LINES = 10000;
+    let logLines = [];
+
+    function toggleAdvancedMode() {
+        const panel = document.getElementById('flash-panel');
+        const checked = document.getElementById('adv-mode-check').checked;
+        const logPanel = document.getElementById('log-panel');
+        if (checked) {
+            panel.classList.add('advanced');
+            logPanel.classList.add('visible');
+        } else {
+            panel.classList.remove('advanced');
+            logPanel.classList.remove('visible');
+        }
+    }
+
+    function appendLog(msg, type) {
+        type = type || 'data';
+        const now = new Date();
+        const ts = now.toLocaleString('zh-CN', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+        logLines.push({ ts, msg, type });
+        if (logLines.length > LOG_MAX_LINES) {
+            logLines.splice(0, logLines.length - LOG_MAX_LINES);
+        }
+        renderLog();
+    }
+
+    function renderLog() {
+        const body = document.getElementById('log-body');
+        const countEl = document.getElementById('log-count');
+        const wasAtBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 30;
+        let html = '';
+        for (let i = 0; i < logLines.length; i++) {
+            const l = logLines[i];
+            html += '<div class="log-line log-' + l.type + '"><span class="log-ts">[' + l.ts + ']</span>' + escHtml(l.msg) + '</div>';
+        }
+        body.innerHTML = html;
+        countEl.textContent = '日志 (' + logLines.length + '/' + LOG_MAX_LINES + ')';
+        if (wasAtBottom) {
+            body.scrollTop = body.scrollHeight;
+        }
+    }
+
+    function escHtml(s) {
+        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function clearLog() {
+        logLines = [];
+        renderLog();
+        appendLog('日志已清空', 'info');
+    }
+
+    function exportLog() {
+        if (!logLines.length) { alert('暂无日志可导出'); return; }
+        let text = '';
+        for (const l of logLines) {
+            text += '[' + l.ts + '] ' + l.msg + '\n';
+        }
+        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const d = new Date();
+        const fname = 'flash_log_' + d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0') + '_' + String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0') + String(d.getSeconds()).padStart(2,'0') + '.txt';
+        a.href = url;
+        a.download = fname;
+        a.click();
+        URL.revokeObjectURL(url);
+        appendLog('日志已导出: ' + fname, 'info');
+    }
+
     // ==================== Flash Functions ====================
     let eventSource = null;
 
@@ -289,10 +432,12 @@
         const name = this.files[0].name;
         if (!fwNameOk(name)) {
             showResult(`⚠️ 不支持的文件类型: ${name}，仅支持 .img / .bin 固件或其 gzip 压缩包(.img.gz / .bin.gz)`, "error");
+            appendLog('不支持的文件类型: ' + name, 'error');
             this.value = '';
             return;
         }
         showResult(/\.gz$/i.test(name) ? `已选择 ${name}，上传时将自动解压` : `已选择 ${name}`, "info");
+        appendLog('已选择固件文件: ' + name, 'info');
     });
 
     async function loadDevices() {
@@ -310,6 +455,7 @@
                 o.selected = true;
                 sel.add(o);
                 showResult("未扫描到可用设备，请插入 U 盘、SATA 硬盘或 NVMe 硬盘后点击刷新", "error");
+                appendLog('未扫描到可用设备', 'error');
                 return;
             }
             devices.forEach(d => {
@@ -319,9 +465,11 @@
                 sel.add(o);
             });
             showResult(`已加载 ${devices.length} 个设备`, "success");
+            appendLog('设备列表已加载，共 ' + devices.length + ' 个设备', 'success');
         } catch (e) {
             sel.innerHTML = '<option value="">加载失败</option>';
             showResult("加载失败: " + e.message, "error");
+            appendLog('设备加载失败: ' + e.message, 'error');
         }
     }
 
@@ -333,24 +481,34 @@
         stopUploadPoll();
         const mb = b => (b / 1048576).toFixed(1);
         const labels = { uploading: '正在上传到 /tmp/', streaming: '正在接收并解压到 /tmp/', extracting: '正在解压到 /tmp/' };
+        let lastLogTime = 0;
+        let lastStage = '';
         const timer = setInterval(async () => {
             try {
                 const r = await fetch('/api/upload_status', { cache: 'no-store' });
                 const s = await r.json();
-                // 期间可能已被 stopUploadPoll 停止，避免覆盖最终结果
                 if (uploadPollTimer !== timer || !s.active) return;
                 const label = labels[s.stage] || '处理中';
                 let line = `${label} ...`;
-                if (s.name) line += `\n文件: ${s.name}`;
+                let logLine = label;
+                if (s.name) { line += `\n文件: ${s.name}`; logLine += ' 文件: ' + s.name; }
                 if (s.stage === 'extracting') {
-                    line += `\n已接收 ${mb(s.received)} MB，正在解压，请稍候...`;
+                    line += `\n已接收 ${mb(s.received)} MB，已解压 ${s.extract_elapsed.toFixed(0)} 秒，请稍候...`;
+                    logLine += ' 已接收 ' + mb(s.received) + ' MB，已解压 ' + s.extract_elapsed.toFixed(0) + ' 秒，请稍候...';
                 } else {
-                    line += s.total > 0
+                    let recv = s.total > 0
                         ? `\n已接收: ${mb(s.received)} / ${mb(s.total)} MB (${s.progress.toFixed(0)}%)`
                         : `\n已接收: ${mb(s.received)} MB`;
-                    line += `\n速度: ${mb(s.speed)} MB/s`;
+                    line += recv + `\n速度: ${mb(s.speed)} MB/s`;
+                    logLine += ' 已接收: ' + (s.total > 0 ? mb(s.received) + ' / ' + mb(s.total) + ' MB (' + s.progress.toFixed(0) + '%)' : mb(s.received) + ' MB') + ' 速度: ' + mb(s.speed) + ' MB/s';
                 }
                 showResult(line, "info");
+                const now = Date.now();
+                if (s.stage !== lastStage || now - lastLogTime >= 3000) {
+                    lastLogTime = now;
+                    if (s.stage !== lastStage) lastStage = s.stage;
+                    appendLog(logLine, 'info');
+                }
             } catch {}
         }, 500);
         uploadPollTimer = timer;
@@ -364,15 +522,17 @@
         e.preventDefault();
         const dev = document.getElementById('device-select');
         const file = document.getElementById('firmware-file');
-        if (!dev.value) { showResult("请先选择目标设备！", "error"); return; }
-        if (!file.files.length) { showResult("请先选择固件文件！", "error"); return; }
+        if (!dev.value) { showResult("请先选择目标设备！", "error"); appendLog("请先选择目标设备", "error"); return; }
+        if (!file.files.length) { showResult("请先选择固件文件！", "error"); appendLog("请先选择固件文件", "error"); return; }
         if (!fwNameOk(file.files[0].name)) {
             showResult(`⚠️ 不支持的文件类型: ${file.files[0].name}，仅支持 .img / .bin 固件或其 gzip 压缩包(.img.gz / .bin.gz)`, "error");
+            appendLog('不支持的文件类型: ' + file.files[0].name, 'error');
             return;
         }
 
         const mb = (file.files[0].size / 1048576).toFixed(1);
         if (!confirm(`⚠️ 确定要将 ${mb} MB 刷写到 ${dev.value}？\n数据将被永久清除！`)) return;
+        appendLog('用户确认刷写: ' + file.files[0].name + ' (' + mb + ' MB) → ' + dev.value, 'warn');
 
         const fd = new FormData();
         fd.append('firmware', file.files[0]);
@@ -381,6 +541,7 @@
         const btn = document.getElementById('btn-flash');
         btn.disabled = true; btn.textContent = "⏳ 执行中...";
         showResult(/\.gz$/i.test(file.files[0].name) ? "正在上传并解压到 /tmp/ ..." : "正在上传到 /tmp/ ...", "info");
+        appendLog('开始上传固件: ' + file.files[0].name + ' → ' + dev.value, 'info');
         hideProgress();
         startUploadPoll();
 
@@ -389,13 +550,14 @@
             stopUploadPoll();   // 服务端已处理完，先停轮询再显示结果
             const text = await resp.text();
             let result;
-            try { result = JSON.parse(text); } catch { showResult(`非JSON响应: ${text.substring(0,300)}`, "error"); resetBtn(); return; }
-            if (!resp.ok) { showResult("❌ " + (result.error || "未知错误"), "error"); resetBtn(); return; }
+            try { result = JSON.parse(text); } catch { showResult(`非JSON响应: ${text.substring(0,300)}`, "error"); appendLog('非JSON响应: ' + text.substring(0,300), 'error'); resetBtn(); return; }
+            if (!resp.ok) { showResult("❌ " + (result.error || "未知错误"), "error"); appendLog("上传失败: " + (result.error || "未知错误"), "error"); resetBtn(); return; }
             showResult("✅ " + result.message, "info");
+            appendLog('上传完成: ' + result.message + ' (task_id=' + result.task_id + ')', 'success');
             startProgress(result.task_id);
         } catch (err) {
             stopUploadPoll();
-            showResult("网络错误: " + err.message, "error"); resetBtn();
+            showResult("网络错误: " + err.message, "error"); appendLog("网络错误: " + err.message, "error"); resetBtn();
         }
     }
 
@@ -407,13 +569,15 @@
             try {
                 const t = JSON.parse(e.data);
                 updateProgressUI(t);
-                if (t.status === "done") { eventSource.close(); eventSource = null; showResult("✅ 刷写完成！", "success"); resetBtn(); }
-                else if (t.status === "error") { eventSource.close(); eventSource = null; showResult("❌ " + (t.error||"未知错误"), "error"); resetBtn(); }
+                if (t.status === "done") { eventSource.close(); eventSource = null; showResult("✅ 刷写完成！", "success"); appendLog("刷写完成！", "success"); resetBtn(); }
+                else if (t.status === "error") { eventSource.close(); eventSource = null; showResult("❌ " + (t.error||"未知错误"), "error"); appendLog("刷写失败: " + (t.error||"未知错误"), "error"); resetBtn(); }
             } catch {}
         };
         eventSource.onerror = () => { if (eventSource) { eventSource.close(); eventSource = null; } };
     }
 
+    let lastStatus = '';
+    let lastProgressLogTime = 0;
     function updateProgressUI(t) {
         const pct = Math.min(t.progress, 100).toFixed(1);
         document.getElementById('progress-bar').style.width = pct + '%';
@@ -425,6 +589,12 @@
         const map = { writing: ['写入中','status-writing'], partitioning: ['重建分区表','status-syncing'], syncing: ['同步中','status-syncing'], done: ['完成','status-done'], error: ['错误','status-error'] };
         const [txt, cls] = map[t.status] || ['',''];
         badge.textContent = txt; badge.className = 'status-badge ' + cls;
+        var now = Date.now();
+        if (t.status !== lastStatus || t.status === 'done' || t.status === 'error' || now - lastProgressLogTime >= 3000) {
+            lastProgressLogTime = now;
+            if (t.status !== lastStatus) lastStatus = t.status;
+            appendLog('进度: ' + pct + '% | 已写入: ' + fmtBytes(t.written) + ' / ' + fmtBytes(t.total) + ' | 速度: ' + (t.speed / 1048576).toFixed(1) + ' MB/s | 状态: ' + txt, t.status === 'error' ? 'error' : t.status === 'done' ? 'success' : 'data');
+        }
     }
 
     // ==================== Reboot ====================
@@ -466,7 +636,14 @@
         return (b / Math.pow(k, i)).toFixed(1) + ' ' + s[i];
     }
 
-    window.onload = loadDevices;
+    window.onload = function() {
+        const advCheck = document.getElementById('adv-mode-check');
+        advCheck.checked = false;
+        document.getElementById('flash-panel').classList.remove('advanced');
+        document.getElementById('log-panel').classList.remove('visible');
+        document.getElementById('firmware-file').value = '';
+        loadDevices();
+    };
 </script>
 </body>
 </html>

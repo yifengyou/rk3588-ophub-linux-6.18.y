@@ -15,15 +15,17 @@ go version
 rm -f rkdev_amd64 rkdev_arm64
 go mod tidy
 
+BUILD_TIME=$(date '+%Y.%m.%d')
+
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
   -trimpath \
-  -ldflags="-s -w -extldflags=-static" \
+  -ldflags="-s -w -extldflags=-static -X 'main.buildTime=${BUILD_TIME}'" \
   -gcflags="all=-l -B" \
   -o rkdev_arm64 .
 
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
   -trimpath \
-  -ldflags="-s -w -extldflags=-static" \
+  -ldflags="-s -w -extldflags=-static -X 'main.buildTime=${BUILD_TIME}'" \
   -gcflags="all=-l -B" \
   -o rkdev_amd64 .
 

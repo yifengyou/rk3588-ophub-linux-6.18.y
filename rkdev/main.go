@@ -35,6 +35,9 @@ var indexHTML string
 //go:embed res
 var resFS embed.FS
 
+// buildTime 由 -ldflags "-X main.buildTime=..." 在编译时注入，用于标记版本
+var buildTime = "unknown"
+
 // uploadDir 是所有本次上传相关临时文件（压缩包、单文件固件）的根目录
 var uploadDir = "/tmp/kdev"
 
@@ -141,11 +144,117 @@ func initLogging() {
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		if p != "/api/progress" && p != "/api/upload_status" && !strings.HasPrefix(p, "/res/") {
+		if p != "/api/progress" && p != "/api/upload_status" && p != "/api/logs" && !strings.HasPrefix(p, "/res/") {
 			log.Printf("[HTTP] %s %s from %s", r.Method, p, r.RemoteAddr)
+			advLog("info", "[HTTP] %s %s from %s", r.Method, p, r.RemoteAddr)
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// ============ Advanced Mode Log Hub ============
+
+type LogEntry struct {
+	Timestamp string `json:"ts"`
+	Level     string `json:"level"`
+	Message   string `json:"msg"`
+}
+
+type logHub struct {
+	mu      sync.RWMutex
+	subs    map[chan LogEntry]struct{}
+	history []LogEntry
+	maxHist int
+}
+
+var hub = &logHub{
+	subs:    make(map[chan LogEntry]struct{}),
+	maxHist: 10000,
+}
+
+func (h *logHub) subscribe() chan LogEntry {
+	ch := make(chan LogEntry, 256)
+	h.mu.Lock()
+	h.subs[ch] = struct{}{}
+	h.mu.Unlock()
+	return ch
+}
+
+func (h *logHub) unsubscribe(ch chan LogEntry) {
+	h.mu.Lock()
+	delete(h.subs, ch)
+	h.mu.Unlock()
+}
+
+func (h *logHub) broadcast(entry LogEntry) {
+	h.mu.Lock()
+	if len(h.history) >= h.maxHist {
+		h.history = h.history[len(h.history)-h.maxHist+1:]
+	}
+	h.history = append(h.history, entry)
+	subs := make([]chan LogEntry, 0, len(h.subs))
+	for ch := range h.subs {
+		subs = append(subs, ch)
+	}
+	h.mu.Unlock()
+	for _, ch := range subs {
+		select {
+		case ch <- entry:
+		default:
+		}
+	}
+}
+
+func (h *logHub) getHistory() []LogEntry {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	cp := make([]LogEntry, len(h.history))
+	copy(cp, h.history)
+	return cp
+}
+
+func advLog(level, format string, args ...interface{}) {
+	entry := LogEntry{
+		Timestamp: time.Now().Format("2006-01-02 15:04:05.000"),
+		Level:     level,
+		Message:   fmt.Sprintf(format, args...),
+	}
+	hub.broadcast(entry)
+}
+
+func handleLogs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", 500)
+		return
+	}
+
+	history := hub.getHistory()
+	for _, entry := range history {
+		data, _ := json.Marshal(entry)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+	}
+	flusher.Flush()
+
+	ch := hub.subscribe()
+	defer hub.unsubscribe(ch)
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case entry := <-ch:
+			data, _ := json.Marshal(entry)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
 }
 
 // ============ Upload Progress ============
@@ -155,19 +264,21 @@ func logRequests(next http.Handler) http.Handler {
 // Total 为请求 Content-Length，因此进度百分比是近似值。
 // Stage: uploading=接收并写入磁盘；streaming=边接收边解压(tar.gz/tar.bz2)；extracting=接收完毕后解压(zip/rar)
 type uploadState struct {
-	Active   bool    `json:"active"`
-	Stage    string  `json:"stage"`
-	Name     string  `json:"name"`
-	Total    int64   `json:"total"`
-	Received int64   `json:"received"`
-	Progress float64 `json:"progress"`
-	Speed    float64 `json:"speed"` // 字节/秒
+	Active       bool    `json:"active"`
+	Stage        string  `json:"stage"`
+	Name         string  `json:"name"`
+	Total        int64   `json:"total"`
+	Received     int64   `json:"received"`
+	Progress     float64 `json:"progress"`
+	Speed        float64 `json:"speed"`        // 字节/秒
+	ExtractElapsed float64 `json:"extract_elapsed"` // 解压已用时间（秒）
 }
 
 var (
-	upMu    sync.Mutex
-	upState uploadState
-	upStart time.Time
+	upMu        sync.Mutex
+	upState     uploadState
+	upStart     time.Time
+	upExtractStart time.Time
 )
 
 func upBegin(total int64) {
@@ -187,6 +298,12 @@ func upSet(name, stage string) {
 func upSetStage(stage string) {
 	upMu.Lock()
 	upState.Stage = stage
+	if stage == "extracting" {
+		upExtractStart = time.Now()
+	}
+	if upExtractStart.IsZero() == false && stage != "extracting" {
+		upState.ExtractElapsed = 0
+	}
 	upMu.Unlock()
 }
 
@@ -226,6 +343,9 @@ func (c *countingBody) Read(p []byte) (int, error) {
 func handleUploadStatus(w http.ResponseWriter, r *http.Request) {
 	upMu.Lock()
 	st := upState
+	if st.Stage == "extracting" && !upExtractStart.IsZero() {
+		st.ExtractElapsed = time.Since(upExtractStart).Seconds()
+	}
 	upMu.Unlock()
 	w.Header().Set("Cache-Control", "no-store")
 	jsonOK(w, st)
@@ -332,13 +452,16 @@ func main() {
 		log.Fatal(err)
 	}
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { tmpl.Execute(w, nil) })
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		tmpl.Execute(w, map[string]string{"BuildTime": buildTime})
+	})
 	http.HandleFunc("/api/devices", func(w http.ResponseWriter, r *http.Request) {
 		jsonOK(w, getFilteredDevices())
 	})
 	http.HandleFunc("/upload", handleUpload)
 	http.HandleFunc("/api/progress", handleProgress)
 	http.HandleFunc("/api/upload_status", handleUploadStatus)
+	http.HandleFunc("/api/logs", handleLogs)
 	http.HandleFunc("/api/reboot", handleReboot)
 
 	http.Handle("/api/terminal", websocket.Handler(handleTerminal))
@@ -494,20 +617,23 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("[UPLOAD] 收到上传请求 from %s", r.RemoteAddr)
+	advLog("info", "[UPLOAD] 收到上传请求, Content-Length=%s, 来源=%s", r.Header.Get("Content-Length"), r.RemoteAddr)
 	upBegin(r.ContentLength)
 	defer upEnd()
 	r.Body = &countingBody{ReadCloser: r.Body}
 
-	// 每次上传前先清空 uploadDir，保证不会残留上一次上传的文件/解压产物，
-	// 然后重新创建 uploadDir 及其下的 unpack 子目录。
 	if err := os.RemoveAll(uploadDir); err != nil {
+		advLog("error", "[UPLOAD] 清理上传目录失败: %v", err)
 		jsonErr(w, http.StatusInternalServerError, "清理上传目录失败: "+err.Error())
 		return
 	}
+	advLog("data", "[UPLOAD] 已清理上传目录 %s", uploadDir)
 	if err := os.MkdirAll(unpackDir, 0755); err != nil {
+		advLog("error", "[UPLOAD] 创建上传目录失败: %v", err)
 		jsonErr(w, http.StatusInternalServerError, "创建上传目录失败: "+err.Error())
 		return
 	}
+	advLog("data", "[UPLOAD] 已创建解压目录 %s", unpackDir)
 
 	mr, err := r.MultipartReader()
 	if err != nil {
@@ -544,11 +670,13 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 			}
 			lowerName := strings.ToLower(safeName)
 			kind = detectArchiveKind(lowerName)
+			advLog("info", "[UPLOAD] 固件文件: %s, 打包格式: %s", safeName, kind)
 			stage := "uploading"
 			if kind == archiveTarGz || kind == archiveTarBz2 {
 				stage = "streaming"
 			}
 			upSet(safeName, stage)
+			advLog("data", "[UPLOAD] 上传阶段: %s", stage)
 
 			// ==== 情况1: tar.gz / tgz — 流式解压，不落盘压缩包 ====
 			if kind == archiveTarGz {
@@ -557,25 +685,36 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 					jsonErr(w, http.StatusInternalServerError, "创建解压目录失败: "+err.Error())
 					return
 				}
+				advLog("info", "[UPLOAD] 开始流式解压 tar.gz -> %s", extractDir)
 				files, err := extractTarGz(part, extractDir)
 				if err != nil {
 					os.RemoveAll(extractDir)
+					advLog("error", "[UPLOAD] 解压 tar.gz 失败: %v", err)
 					jsonErr(w, http.StatusBadRequest, "解压 tar.gz 失败: "+err.Error())
 					return
 				}
 				if len(files) == 0 {
 					os.RemoveAll(extractDir)
+					advLog("error", "[UPLOAD] tar.gz 包内没有常规文件")
 					jsonErr(w, http.StatusBadRequest, "tar.gz 包内没有常规文件")
 					return
+				}
+				advLog("success", "[UPLOAD] tar.gz 解压完成, 共 %d 个文件", len(files))
+				for _, f := range files {
+					if st, e := os.Stat(f); e == nil {
+						advLog("data", "[UPLOAD] 解压文件: %s (%s)", filepath.Base(f), formatBytes(st.Size()))
+					}
 				}
 				task, msg, err := buildTaskFromExtracted(files, extractDir, target)
 				if err != nil {
 					os.RemoveAll(extractDir)
+					advLog("error", "[UPLOAD] 构建刷写任务失败: %v", err)
 					jsonErr(w, http.StatusBadRequest, err.Error())
 					return
 				}
 				log.Printf("[UPLOAD] %s -> tar.gz 解压到 %s，%d 文件，mode=%s -> %s",
 					safeName, extractDir, len(files), task.Mode, target)
+				advLog("success", "[UPLOAD] 任务构建完成: mode=%s, 目标=%s, task_id=%s", task.Mode, target, task.ID)
 				go doFlash(task)
 				jsonOK(w, map[string]string{"task_id": task.ID, "message": msg})
 				return
@@ -588,25 +727,36 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 					jsonErr(w, http.StatusInternalServerError, "创建解压目录失败: "+err.Error())
 					return
 				}
+				advLog("info", "[UPLOAD] 开始流式解压 tar.bz2 -> %s", extractDir)
 				files, err := extractTarBz2(part, extractDir)
 				if err != nil {
 					os.RemoveAll(extractDir)
+					advLog("error", "[UPLOAD] 解压 tar.bz2 失败: %v", err)
 					jsonErr(w, http.StatusBadRequest, "解压 tar.bz2 失败: "+err.Error())
 					return
 				}
 				if len(files) == 0 {
 					os.RemoveAll(extractDir)
+					advLog("error", "[UPLOAD] tar.bz2 包内没有常规文件")
 					jsonErr(w, http.StatusBadRequest, "tar.bz2 包内没有常规文件")
 					return
+				}
+				advLog("success", "[UPLOAD] tar.bz2 解压完成, 共 %d 个文件", len(files))
+				for _, f := range files {
+					if st, e := os.Stat(f); e == nil {
+						advLog("data", "[UPLOAD] 解压文件: %s (%s)", filepath.Base(f), formatBytes(st.Size()))
+					}
 				}
 				task, msg, err := buildTaskFromExtracted(files, extractDir, target)
 				if err != nil {
 					os.RemoveAll(extractDir)
+					advLog("error", "[UPLOAD] 构建刷写任务失败: %v", err)
 					jsonErr(w, http.StatusBadRequest, err.Error())
 					return
 				}
 				log.Printf("[UPLOAD] %s -> tar.bz2 解压到 %s，%d 文件，mode=%s -> %s",
 					safeName, extractDir, len(files), task.Mode, target)
+				advLog("success", "[UPLOAD] 任务构建完成: mode=%s, 目标=%s, task_id=%s", task.Mode, target, task.ID)
 				go doFlash(task)
 				jsonOK(w, map[string]string{"task_id": task.ID, "message": msg})
 				return
@@ -619,8 +769,10 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 					ext = ".rar"
 				}
 				archivePath = filepath.Join(uploadDir, fmt.Sprintf("pkg_%d%s", time.Now().UnixNano(), ext))
+				advLog("info", "[UPLOAD] 接收压缩包 %s -> %s", ext, archivePath)
 				dst, cerr := os.Create(archivePath)
 				if cerr != nil {
+					advLog("error", "[UPLOAD] 创建临时文件失败: %v", cerr)
 					jsonErr(w, http.StatusInternalServerError, "创建临时文件失败: "+cerr.Error())
 					return
 				}
@@ -628,18 +780,21 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 				dst.Close()
 				if err != nil {
 					os.Remove(archivePath)
+					advLog("error", "[UPLOAD] 保存压缩包失败: %v", err)
 					jsonErr(w, http.StatusInternalServerError, "保存固件包失败: "+err.Error())
 					return
 				}
 				if written == 0 {
 					os.Remove(archivePath)
+					advLog("error", "[UPLOAD] 压缩包内容为空")
 					jsonErr(w, http.StatusBadRequest, "文件内容为空")
 					return
 				}
+				advLog("success", "[UPLOAD] 压缩包接收完成: %s (%s)", filepath.Base(archivePath), formatBytes(written))
 			} else {
-				// ==== 情况4: 单文件 .img/.bin 或 .gz ====
 				innerName, err = checkFirmwareName(safeName)
 				if err != nil {
+					advLog("error", "[UPLOAD] 文件类型检查失败: %v", err)
 					jsonErr(w, http.StatusBadRequest, err.Error())
 					return
 				}
@@ -647,21 +802,25 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 				n, _ := io.ReadFull(part, head)
 				head = head[:n]
 				isGzip = n == 2 && head[0] == 0x1f && head[1] == 0x8b
+				advLog("data", "[UPLOAD] 单文件固件: innerName=%s, isGzip=%v", innerName, isGzip)
 
 				var src io.Reader = io.MultiReader(bytes.NewReader(head), part)
 				if isGzip {
 					gz, gerr := gzip.NewReader(src)
 					if gerr != nil {
+						advLog("error", "[UPLOAD] gzip 解压初始化失败: %v", gerr)
 						jsonErr(w, http.StatusBadRequest, "gzip 解压失败: "+gerr.Error())
 						return
 					}
 					defer gz.Close()
 					src = gz
+					advLog("info", "[UPLOAD] 检测到 gzip 格式, 将自动解压")
 				}
 
 				tmpPath = filepath.Join(uploadDir, fmt.Sprintf("fw_%d_%s", time.Now().UnixNano(), innerName))
 				dst, cerr := os.Create(tmpPath)
 				if cerr != nil {
+					advLog("error", "[UPLOAD] 创建临时文件失败: %v", cerr)
 					jsonErr(w, http.StatusInternalServerError, "创建临时文件失败: "+cerr.Error())
 					return
 				}
@@ -670,17 +829,21 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					os.Remove(tmpPath)
 					if isGzip {
+						advLog("error", "[UPLOAD] gzip 解压写入失败: %v", err)
 						jsonErr(w, http.StatusBadRequest, "gzip 解压失败: "+err.Error())
 					} else {
+						advLog("error", "[UPLOAD] 保存文件失败: %v", err)
 						jsonErr(w, http.StatusInternalServerError, "保存文件失败: "+err.Error())
 					}
 					return
 				}
 				if written == 0 {
 					os.Remove(tmpPath)
+					advLog("error", "[UPLOAD] 文件内容为空")
 					jsonErr(w, http.StatusBadRequest, "文件内容为空")
 					return
 				}
+				advLog("success", "[UPLOAD] 固件文件已暂存: %s (%s), isGzip=%v", filepath.Base(tmpPath), formatBytes(written), isGzip)
 			}
 		}
 		part.Close()
@@ -709,31 +872,41 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		extractDir := filepath.Join(unpackDir, fmt.Sprintf("pkg_%d", time.Now().UnixNano()))
 		if err := os.MkdirAll(extractDir, 0755); err != nil {
 			os.Remove(archivePath)
+			advLog("error", "[UPLOAD] 创建解压目录失败: %v", err)
 			jsonErr(w, http.StatusInternalServerError, "创建解压目录失败: "+err.Error())
 			return
 		}
 
+		advLog("info", "[UPLOAD] 开始解压 %s 压缩包 -> %s", kind, extractDir)
 		var files []string
 		if kind == archiveZip {
 			files, err = extractZip(archivePath, extractDir)
 		} else {
 			files, err = extractRar(archivePath, extractDir)
 		}
-		// 压缩包解压后保留，下一次上传时随 uploadDir 一并清空
 		if err != nil {
 			os.RemoveAll(extractDir)
+			advLog("error", "[UPLOAD] 解压 %s 失败: %v", kind, err)
 			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("解压 %s 固件包失败: %v", kind, err))
 			return
+		}
+		advLog("success", "[UPLOAD] %s 解压完成, 共 %d 个文件", kind, len(files))
+		for _, f := range files {
+			if st, e := os.Stat(f); e == nil {
+				advLog("data", "[UPLOAD] 解压文件: %s (%s)", filepath.Base(f), formatBytes(st.Size()))
+			}
 		}
 
 		task, msg, err = buildTaskFromExtracted(files, extractDir, target)
 		if err != nil {
 			os.RemoveAll(extractDir)
+			advLog("error", "[UPLOAD] 构建刷写任务失败: %v", err)
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		log.Printf("[UPLOAD] %s -> 已解压到 %s，共 %d 个文件，mode=%s -> %s",
 			safeName, extractDir, len(files), task.Mode, target)
+		advLog("success", "[UPLOAD] 任务构建完成: mode=%s, 目标=%s, task_id=%s", task.Mode, target, task.ID)
 	} else {
 		task = newTask(target, written)
 		task.Mode = "single"
@@ -745,6 +918,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 				safeName, innerName, written/1024/1024, target)
 		}
 		log.Printf("[UPLOAD] %s -> %s (%d bytes, gzip=%v) -> %s", safeName, tmpPath, written, isGzip, target)
+		advLog("success", "[UPLOAD] 单文件任务已创建: mode=single, 目标=%s, task_id=%s", target, task.ID)
 	}
 
 	go doFlash(task)
@@ -979,14 +1153,21 @@ func buildSingleFileTask(filePath, extractDir, target string) (*FlashTask, strin
 // parameter.txt 中未能匹配到任何镜像文件的分区会被跳过（这是正常情况，因为分区表里常常包含
 // 一些仅用于占位、不随固件包分发独立镜像的分区）；只有当所有分区都匹配失败时才报错。
 func buildMultiFileTask(files []string, extractDir, target string) (*FlashTask, string, error) {
-	// 1. 定位并解析 parameter.txt 分区表
+	advLog("info", "[MULTI] 开始解析多文件固件包: %d 个文件, 解压目录=%s, 目标=%s", len(files), extractDir, target)
 	paramPath := findByBaseNames(files, []string{"parameter.txt", "parameter"})
 	if paramPath == "" {
+		advLog("error", "[MULTI] 未找到 parameter.txt 分区表")
 		return nil, "", fmt.Errorf("固件包内包含 %d 个文件，但未找到 parameter.txt 分区表，无法确定多文件写入方式", len(files))
 	}
+	advLog("data", "[MULTI] 找到分区表: %s", paramPath)
 	partitions, err := parseParameterFile(paramPath)
 	if err != nil {
+		advLog("error", "[MULTI] 解析 parameter.txt 失败: %v", err)
 		return nil, "", fmt.Errorf("解析 parameter.txt 失败: %v", err)
+	}
+	advLog("success", "[MULTI] parameter.txt 解析完成: %d 个分区定义", len(partitions))
+	for _, p := range partitions {
+		advLog("data", "[MULTI] 分区: '%s' offset=0x%X(扇区%d) size=0x%X uuid=%s", p.Name, p.Offset, p.Offset, p.Size, p.UUID)
 	}
 
 	// 2. 定位镜像描述文件：优先 package-file，其次 config.cfg，都没有则按文件名猜测
@@ -997,17 +1178,22 @@ func buildMultiFileTask(files []string, extractDir, target string) (*FlashTask, 
 	if pkgPath := findByBaseNames(files, []string{"package-file"}); pkgPath != "" {
 		pkgItems, err = parsePackageFile(pkgPath)
 		if err != nil {
+			advLog("error", "[MULTI] 解析 package-file 失败: %v", err)
 			return nil, "", fmt.Errorf("解析 package-file 失败: %v", err)
 		}
 		sourceDesc = "package-file"
+		advLog("data", "[MULTI] 镜像描述来源: package-file (%s), %d 条条目", pkgPath, len(pkgItems))
 	} else if cfgPath := findConfigCfg(files); cfgPath != "" {
 		cfgItems, err = parseConfigCfg(cfgPath)
 		if err != nil {
+			advLog("error", "[MULTI] 解析 config.cfg 失败: %v", err)
 			return nil, "", fmt.Errorf("解析 config.cfg 失败: %v", err)
 		}
 		sourceDesc = "config.cfg"
+		advLog("data", "[MULTI] 镜像描述来源: config.cfg (%s), %d 条条目", cfgPath, len(cfgItems))
 	} else {
 		sourceDesc = "文件名猜测"
+		advLog("warn", "[MULTI] 未找到 package-file 或 config.cfg, 使用文件名猜测模式")
 	}
 
 	// 3. 按分区表逐一匹配镜像文件，构建写入任务
@@ -1034,6 +1220,7 @@ func buildMultiFileTask(files []string, extractDir, target string) (*FlashTask, 
 
 		if !found {
 			skipped = append(skipped, part.Name)
+			advLog("warn", "[MULTI] 分区 '%s' 未匹配到镜像文件, 跳过", part.Name)
 			continue
 		}
 
@@ -1042,6 +1229,9 @@ func buildMultiFileTask(files []string, extractDir, target string) (*FlashTask, 
 			skipped = append(skipped, part.Name)
 			if serr != nil {
 				log.Printf("buildMultiFileTask: stat '%s' 失败: %v", imgPath, serr)
+				advLog("warn", "[MULTI] stat '%s' 失败: %v", imgPath, serr)
+			} else {
+				advLog("warn", "[MULTI] 分区 '%s' 文件无效或为空, 跳过", part.Name)
 			}
 			continue
 		}
@@ -1054,18 +1244,20 @@ func buildMultiFileTask(files []string, extractDir, target string) (*FlashTask, 
 			Path:   imgPath,
 		})
 		totalSize += st.Size()
+		advLog("success", "[MULTI] 分区 '%s' -> %s (%s) @ offset 0x%X", part.Name, filepath.Base(imgPath), formatBytes(st.Size()), offsetBytes)
 	}
 
 	if len(items) == 0 {
+		advLog("error", "[MULTI] 未匹配到任何镜像文件 (来源: %s)", sourceDesc)
 		return nil, "", fmt.Errorf("根据 parameter.txt 的 %d 个分区，未能匹配到任何可写入的镜像文件（描述文件来源: %s）", len(partitions), sourceDesc)
 	}
 
 	task := newTask(target, totalSize)
 	task.Mode = "multi"
 	task.Items = items
-	// 保存完整分区表（而非仅匹配到镜像的部分），用于刷写前按磁盘实际容量重建 GPT 分区表，
-	// 这样即使某些分区本次没有对应镜像文件，也能在分区表中正确保留位置。
 	task.Partitions = partitions
+	advLog("success", "[MULTI] 多文件任务构建完成: %d 个分区匹配, %d 个跳过, 总大小 %s, task_id=%s",
+		len(items), len(skipped), formatBytes(totalSize), task.ID)
 
 	msg := fmt.Sprintf("固件包解析完成（%s + parameter.txt），%d 个分区匹配到镜像（%d 个分区未匹配，已跳过），共 %d MB，将重建 GPT 分区表后写入 %s ...",
 		sourceDesc, len(items), len(skipped), totalSize/1024/1024, target)
@@ -1116,28 +1308,35 @@ func findConfigCfg(files []string) string {
 
 // doFlash 执行刷写
 func doFlash(task *FlashTask) {
-	// 刷机结束后不删除上传/解压文件，仅在下一次上传开始时统一清空 uploadDir
-	// 统一记录失败日志（错误原本只写入 task 状态，日志里看不到）
 	defer func() {
 		if t := getTask(task.ID); t != nil && t.Status == "error" {
 			log.Printf("[%s] ❌ Flash failed: %s", task.ID, t.Error)
+			advLog("error", "[%s] ❌ 刷写失败: %s", task.ID, t.Error)
 		}
 	}()
 
 	log.Printf("[%s] Flash start: mode=%s, %d item(s) -> %s (%d bytes)",
 		task.ID, task.Mode, len(task.Items), task.TargetDev, task.Total)
+	advLog("info", "[%s] 🚀 刷写开始: 模式=%s, %d 个分区 -> %s (总大小 %s)",
+		task.ID, task.Mode, len(task.Items), task.TargetDev, formatBytes(task.Total))
+	for i, item := range task.Items {
+		advLog("data", "[%s] 📋 分区 #%d: '%s' (%s) @ offset 0x%X, 文件: %s",
+			task.ID, i+1, item.Name, formatBytes(item.Size), item.Offset, item.Path)
+	}
 
-	// 多文件刷写前先按 parameter.txt 重建 GPT 分区表，避免设备上残留与当前磁盘容量不匹配、
-	// 备份表损坏等陈旧分区信息（即 "GPT PMBR size mismatch" / "backup GPT table is corrupt" 问题）。
 	if task.Mode == "multi" && len(task.Partitions) > 0 {
 		updateTask(task.ID, func(t *FlashTask) { t.Status = "partitioning" })
+		advLog("warn", "[%s] 🔧 重建 GPT 分区表: %s (共 %d 个分区定义)",
+			task.ID, task.TargetDev, len(task.Partitions))
 		if err := applyGPTPartitionTable(task.TargetDev, task.Partitions); err != nil {
 			updateTask(task.ID, func(t *FlashTask) {
 				t.Status = "error"
 				t.Error = "重建 GPT 分区表失败: " + err.Error()
 			})
+			advLog("error", "[%s] ❌ 重建 GPT 分区表失败: %v", task.ID, err)
 			return
 		}
+		advLog("success", "[%s] ✅ GPT 分区表重建完成", task.ID)
 		updateTask(task.ID, func(t *FlashTask) { t.Status = "writing" })
 	}
 
@@ -1147,6 +1346,7 @@ func doFlash(task *FlashTask) {
 			t.Status = "error"
 			t.Error = "打开目标设备失败: " + err.Error()
 		})
+		advLog("error", "[%s] ❌ 打开目标设备 %s 失败: %v", task.ID, task.TargetDev, err)
 		return
 	}
 	defer dst.Close()
@@ -1162,8 +1362,12 @@ func doFlash(task *FlashTask) {
 				t.Status = "error"
 				t.Error = fmt.Sprintf("打开源文件 %s 失败: %v", item.Name, err)
 			})
+			advLog("error", "[%s] ❌ 打开源文件 %s 失败: %v", task.ID, item.Path, err)
 			return
 		}
+
+		advLog("info", "[%s] 📝 开始写入分区 '%s' (%s) @ offset 0x%X",
+			task.ID, item.Name, formatBytes(item.Size), item.Offset)
 
 		if _, err := dst.Seek(item.Offset, io.SeekStart); err != nil {
 			src.Close()
@@ -1171,11 +1375,14 @@ func doFlash(task *FlashTask) {
 				t.Status = "error"
 				t.Error = fmt.Sprintf("定位分区 '%s' 失败: %v", item.Name, err)
 			})
+			advLog("error", "[%s] ❌ 定位分区 '%s' @ offset 0x%X 失败: %v", task.ID, item.Name, item.Offset, err)
 			return
 		}
 
 		log.Printf("[%s] Writing '%s' (%d bytes) @ offset %d", task.ID, item.Name, item.Size, item.Offset)
 
+		var itemWritten int64
+		lastLogTime := time.Now()
 		for {
 			n, readErr := src.Read(buf)
 			if n > 0 {
@@ -1185,9 +1392,11 @@ func doFlash(task *FlashTask) {
 						t.Status = "error"
 						t.Error = fmt.Sprintf("写入 '%s' 失败 @ %d bytes: %v", item.Name, totalWritten, werr)
 					})
+					advLog("error", "[%s] ❌ 写入分区 '%s' 失败 @ %d bytes: %v", task.ID, item.Name, totalWritten, werr)
 					return
 				}
 				totalWritten += int64(n)
+				itemWritten += int64(n)
 				elapsed := time.Since(start).Seconds()
 				updateTask(task.ID, func(t *FlashTask) {
 					t.Written = totalWritten
@@ -1198,6 +1407,13 @@ func doFlash(task *FlashTask) {
 						t.Speed = float64(totalWritten) / elapsed
 					}
 				})
+				if time.Since(lastLogTime) >= 2*time.Second {
+					advLog("data", "[%s] ⏳ 分区 '%s' 写入进度: %s / %s (%.1f%%), 速度 %.1f MB/s",
+						task.ID, item.Name, formatBytes(itemWritten), formatBytes(item.Size),
+						float64(itemWritten)/float64(item.Size)*100,
+						float64(totalWritten)/elapsed/1024/1024)
+					lastLogTime = time.Now()
+				}
 			}
 			if readErr != nil {
 				if readErr != io.EOF {
@@ -1206,16 +1422,20 @@ func doFlash(task *FlashTask) {
 						t.Status = "error"
 						t.Error = fmt.Sprintf("读取 '%s' 失败: %v", item.Name, readErr)
 					})
+					advLog("error", "[%s] ❌ 读取分区 '%s' 文件失败: %v", task.ID, item.Name, readErr)
 					return
 				}
 				break
 			}
 		}
 		src.Close()
+		advLog("success", "[%s] ✅ 分区 '%s' 写入完成 (%s)", task.ID, item.Name, formatBytes(itemWritten))
 	}
 
 	updateTask(task.ID, func(t *FlashTask) { t.Status = "syncing" })
+	advLog("warn", "[%s] 💾 同步磁盘数据中...", task.ID)
 	dst.Sync()
+	advLog("success", "[%s] ✅ 磁盘同步完成", task.ID)
 
 	elapsed := time.Since(start).Seconds()
 	updateTask(task.ID, func(t *FlashTask) {
@@ -1228,6 +1448,8 @@ func doFlash(task *FlashTask) {
 	})
 	log.Printf("[%s] ✅ Done: %d bytes, %.1fs, %.1f MB/s",
 		task.ID, totalWritten, elapsed, float64(totalWritten)/elapsed/1024/1024)
+	advLog("success", "[%s] 🎉 刷写全部完成! 总计 %s, 耗时 %.1fs, 平均速度 %.1f MB/s",
+		task.ID, formatBytes(totalWritten), elapsed, float64(totalWritten)/elapsed/1024/1024)
 }
 
 // ============ GPT Partition Table Rebuild (sgdisk) ============
@@ -1269,39 +1491,49 @@ func blockDeviceSectors(target string) (uint64, error) {
 func applyGPTPartitionTable(target string, partitions []ParamPartition) error {
 	sgdiskPath, err := exec.LookPath("sgdisk")
 	if err != nil {
+		advLog("error", "[GPT] 未找到 sgdisk 工具")
 		return fmt.Errorf("未找到 sgdisk 工具，无法重建 GPT 分区表（请安装 gdisk / gptfdisk 软件包）: %w", err)
 	}
+	advLog("data", "[GPT] sgdisk 路径: %s", sgdiskPath)
 
 	diskSectors, err := blockDeviceSectors(target)
 	if err != nil {
+		advLog("error", "[GPT] 获取磁盘容量失败: %v", err)
 		return err
 	}
 	if diskSectors == 0 {
+		advLog("error", "[GPT] 磁盘容量为 0")
 		return fmt.Errorf("无法获取 %s 的磁盘容量", target)
 	}
+	advLog("data", "[GPT] 磁盘 %s 容量: %d 扇区 (%s)", target, diskSectors, formatBytes(int64(diskSectors)*512))
 
 	args, created := buildSgdiskArgs(partitions, diskSectors)
 	if len(created) == 0 {
+		advLog("error", "[GPT] 没有可用于创建 GPT 分区的有效分区项")
 		return fmt.Errorf("parameter.txt 中没有可用于创建 GPT 分区的有效分区项")
 	}
+	advLog("data", "[GPT] 将创建 %d 个 GPT 分区: %v", len(created), created)
 
-	// 第一步：清除现有的 GPT / MBR。对已损坏的分区表 sgdisk 可能给出警告甚至非零退出码，
-	// 此处仅记录日志，不视为致命错误——后续带 -o 的命令会再次完整重建分区表。
+	advLog("data", "[GPT] 执行 sgdisk --zap-all %s", target)
 	zapOut, zapErr := exec.Command(sgdiskPath, "--zap-all", target).CombinedOutput()
 	if zapErr != nil {
 		log.Printf("[GPT] sgdisk --zap-all %s 返回错误（忽略，继续重建）: %v, output: %s", target, zapErr, string(zapOut))
+		advLog("warn", "[GPT] sgdisk --zap-all 返回错误(忽略): %v", zapErr)
+	} else {
+		advLog("data", "[GPT] sgdisk --zap-all 完成, 已清除旧分区表")
 	}
 
-	// 第二步：新建 GPT 并创建全部分区
 	fullArgs := append([]string{"-o", "-a", "1"}, args...)
 	fullArgs = append(fullArgs, target)
+	advLog("data", "[GPT] 执行: sgdisk %s", strings.Join(fullArgs, " "))
 	out, err := exec.Command(sgdiskPath, fullArgs...).CombinedOutput()
 	if err != nil {
+		advLog("error", "[GPT] sgdisk 写入分区表失败: %v, 输出: %s", err, string(out))
 		return fmt.Errorf("sgdisk 写入分区表失败: %v, output: %s\n命令: sgdisk %s", err, string(out), strings.Join(fullArgs, " "))
 	}
 
 	rereadPartitionTable(target)
-
+	advLog("success", "[GPT] GPT 分区表重建完成: %s, %d 个分区, 磁盘 %d 扇区", target, len(created), diskSectors)
 	log.Printf("[GPT] 已通过 sgdisk 在 %s 上重建 GPT 分区表，共 %d 个分区: %v，磁盘容量 %d 扇区\n命令: sgdisk %s\nsgdisk 输出:\n%s",
 		target, len(created), created, diskSectors, strings.Join(fullArgs, " "), string(out))
 	return nil
