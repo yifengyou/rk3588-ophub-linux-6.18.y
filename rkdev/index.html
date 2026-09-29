@@ -117,21 +117,27 @@
         .boot-card { background: #fff; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.05); }
         .boot-card h1 { color: #2c5aa0; font-size: 28px; margin-bottom: 8px; }
         .boot-card .subtitle { color: #666; font-size: 14px; margin-bottom: 25px; }
-        .boot-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 25px; }
-        .boot-item { display: flex; align-items: center; gap: 15px; padding: 16px 20px; background: #f8faff; border: 2px solid #e0e8f5; border-radius: 8px; transition: all .2s; }
-        .boot-item.active { border-color: #2c5aa0; background: #eef4fc; }
-        .boot-item.dragging { opacity: .5; border-style: dashed; }
-        .boot-item.drag-over { border-color: #4a90d9; border-top-width: 3px; }
-        .boot-rank { width: 32px; height: 32px; border-radius: 50%; background: #2c5aa0; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: bold; flex-shrink: 0; }
-        .boot-item.active .boot-rank { background: #1a7a4a; }
-        .boot-type { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 3px; flex-shrink: 0; letter-spacing: .5px; }
-        .boot-type-usb { background: #e3f2fd; color: #1565c0; }
-        .boot-type-nvme { background: #f3e5f5; color: #7b1fa2; }
-        .boot-type-sata { background: #e8f5e9; color: #2e7d32; }
-        .boot-info { flex: 1; text-align: left; }
-        .boot-label { font-size: 15px; font-weight: 600; color: #333; }
-        .boot-devpath { font-size: 12px; color: #888; font-family: "Cascadia Code", "Fira Code", Menlo, monospace; margin-top: 2px; }
-        .boot-handle { font-size: 18px; color: #ccc; cursor: grab; flex-shrink: 0; user-select: none; }
+        .boot-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+        .boot-item { display: flex; align-items: center; gap: 16px; padding: 14px 20px; background: #fff; border: 1px solid #e8eef8; border-radius: 10px; transition: all .25s ease; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+        .boot-item:hover { border-color: #c5d5ed; box-shadow: 0 2px 8px rgba(44,90,160,.08); }
+        .boot-item.active { border-color: #2c5aa0; background: linear-gradient(135deg, #f0f6ff, #e8f0fc); box-shadow: 0 2px 12px rgba(44,90,160,.12); }
+        .boot-item.dragging { opacity: .4; border-style: dashed; }
+        .boot-item.drag-over { border-color: #4a90d9; border-top: 3px solid #4a90d9; }
+        .boot-rank { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; flex-shrink: 0; transition: all .25s; background: #e8eef8; color: #5c7ebf; }
+        .boot-item.active .boot-rank { background: #2c5aa0; color: #fff; box-shadow: 0 2px 8px rgba(44,90,160,.3); }
+        .boot-type-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: 20px; flex-shrink: 0; letter-spacing: .3px; }
+        .boot-type-badge .badge-icon { font-size: 14px; }
+        .boot-type-usb .boot-type-badge { background: #e3f2fd; color: #1565c0; border: 1px solid #bbdefb; }
+        .boot-type-nvme .boot-type-badge { background: #f3e5f5; color: #7b1fa2; border: 1px solid #e1bee7; }
+        .boot-type-sata .boot-type-badge { background: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
+        .boot-type-emmc .boot-type-badge { background: #fff3e0; color: #e65100; border: 1px solid #ffe0b2; }
+        .boot-item.active .boot-type-badge { border-width: 1px; }
+        .boot-info { flex: 1; text-align: left; min-width: 0; }
+        .boot-label { font-size: 14px; font-weight: 600; color: #333; }
+        .boot-item.active .boot-label { color: #1a3a6a; }
+        .boot-devpath { font-size: 11px; color: #99a; font-family: "Cascadia Code", "Fira Code", Menlo, monospace; margin-top: 3px; }
+        .boot-handle { font-size: 16px; color: #ccc; cursor: grab; flex-shrink: 0; user-select: none; padding: 4px 2px; transition: color .15s; }
+        .boot-handle:hover { color: #2c5aa0; }
         .boot-handle:active { cursor: grabbing; }
         .boot-actions { display: flex; gap: 10px; justify-content: center; }
         .boot-actions button { padding: 10px 24px; font-size: 14px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all .2s; }
@@ -141,6 +147,27 @@
         .btn-boot-save:hover { background: #1a4a80; }
         .btn-boot-save:disabled { background: #999; cursor: not-allowed; }
         .boot-hint { text-align: center; color: #aaa; font-size: 12px; margin-top: 15px; }
+        .boot-section-title { color: #2c5aa0; font-size: 16px; margin-bottom: 5px; text-align: left; border-bottom: 2px solid #e0e8f5; padding-bottom: 6px; }
+        .boot-current-cmd { background: #1e1e1e; border-radius: 6px; padding: 12px 16px; margin: 15px 0; text-align: left; overflow-x: auto; }
+        .boot-cmd-label { color: #6a9955; font-size: 12px; margin-right: 8px; }
+        .boot-current-cmd code { color: #d4d4d4; font-family: "Cascadia Code", "Fira Code", Menlo, monospace; font-size: 12px; word-break: break-all; }
+        .boot-vars-table { border: 1px solid #e0e8f5; border-radius: 6px; overflow: hidden; max-height: 400px; overflow-y: auto; }
+        .boot-vars-table table { width: 100%; border-collapse: collapse; }
+        .boot-vars-table th { background: #f0f4fc; color: #2c5aa0; font-size: 13px; padding: 10px 14px; text-align: left; font-weight: 600; position: sticky; top: 0; }
+        .boot-vars-table td { padding: 8px 14px; font-size: 13px; border-top: 1px solid #f0f2f5; text-align: left; }
+        .boot-vars-table td:first-child { font-family: "Cascadia Code", "Fira Code", Menlo, monospace; color: #2c5aa0; font-weight: 600; }
+        .boot-vars-table td:last-child { font-family: "Cascadia Code", "Fira Code", Menlo, monospace; color: #555; word-break: break-all; }
+        .boot-vars-table tr.changed td { background: #fff9c4; }
+        .boot-vars-table tr.changed td:first-child::after { content: ' ✏️'; font-size: 11px; }
+        .boot-var-input { width: 100%; padding: 4px 8px; border: 1px solid transparent; border-radius: 3px; font-family: "Cascadia Code", "Fira Code", Menlo, monospace; font-size: 13px; color: #555; background: transparent; transition: all .15s; }
+        .boot-var-input:focus { border-color: #2c5aa0; background: #fff; outline: none; }
+        .boot-var-actions { display: flex; gap: 8px; margin-top: 12px; justify-content: center; }
+        .btn-var-save { padding: 8px 20px; font-size: 13px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; background: #d9534f; color: #fff; transition: all .2s; }
+        .btn-var-save:hover { background: #c9302c; }
+        .btn-var-save:disabled { background: #ccc; cursor: not-allowed; }
+        .btn-var-reset { padding: 8px 20px; font-size: 13px; border: 1px solid #ccc; border-radius: 6px; cursor: pointer; font-weight: 600; background: #fff; color: #666; transition: all .2s; }
+        .btn-var-reset:hover { background: #f5f5f5; }
+        .btn-var-reset:disabled { background: #f5f5f5; color: #ccc; border-color: #eee; cursor: not-allowed; }
     </style>
 </head>
 <body>
@@ -233,15 +260,38 @@
 <div id="boot-panel" class="panel">
     <div class="boot-card">
         <h1>引导顺序设置</h1>
-        <p class="subtitle">拖拽引导项调整启动顺序，保存后重启生效。仅支持 USB / NVMe / SATA 设备。</p>
+        <p class="subtitle">通过配置 U-Boot bootcmd 变量调整启动顺序，保存后重启生效。支持 USB / NVMe / SATA 引导。</p>
+
+        <h2 class="boot-section-title">引导顺序配置</h2>
+        <p class="boot-hint" style="text-align:left;margin-bottom:12px;">拖拽调整引导顺序，排第一项为默认启动设备。保存后将写入 bootcmd 环境变量。</p>
         <div class="boot-list" id="boot-list">
             <div style="text-align:center;color:#aaa;padding:30px 0;">点击下方刷新按钮获取当前启动顺序</div>
+        </div>
+        <div class="boot-current-cmd" id="boot-current-cmd" style="display:none;">
+            <span class="boot-cmd-label">当前 bootcmd:</span>
+            <code id="bootcmd-display"></code>
         </div>
         <div class="boot-actions">
             <button type="button" class="btn-boot-refresh" onclick="loadBootOrder()">🔄 刷新</button>
             <button type="button" class="btn-boot-save" id="btn-boot-save" onclick="saveBootOrder()" disabled>💾 保存顺序</button>
         </div>
-        <p class="boot-hint">提示：拖拽引导项可调整顺序，排第一项为默认启动设备</p>
+
+        <h2 class="boot-section-title" style="margin-top:35px;">U-Boot 环境变量</h2>
+        <p class="boot-hint" style="text-align:left;margin-bottom:12px;">直接编辑变量值后点击「保存修改」写入 U-Boot 环境。修改环境变量有风险，请确保了解含义后再保存。</p>
+        <div class="boot-vars-table">
+            <table id="boot-vars-table">
+                <thead>
+                    <tr><th style="width:25%;">变量名</th><th>值</th></tr>
+                </thead>
+                <tbody id="boot-vars-body">
+                    <tr><td colspan="2" style="text-align:center;color:#aaa;padding:20px 0;">点击刷新按钮加载环境变量</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="boot-var-actions">
+            <button type="button" class="btn-var-reset" id="btn-var-reset" onclick="resetBootVars()" disabled>↩️ 还原修改</button>
+            <button type="button" class="btn-var-save" id="btn-var-save" onclick="saveBootVars()" disabled>⚠️ 保存修改</button>
+        </div>
     </div>
 </div>
 
@@ -668,27 +718,60 @@
         }, 2000);
     }
 
-    // ==================== Boot Order ====================
-    let bootEntries = [];
+    // ==================== Boot Order (U-Boot) ====================
+    const bootTypes = [
+        { type: 'usb',   cmd: 'bootcmd_usb',  label: 'USB',        icon: '🔌' },
+        { type: 'nvme',  cmd: 'bootcmd_nvme', label: 'NVMe',       icon: '⚡' },
+        { type: 'sata',  cmd: 'bootcmd_scsi', label: 'SATA/SCSI',  icon: '💿' },
+        { type: 'emmc',  cmd: 'bootcmd_emmc', label: 'eMMC',       icon: '💾' },
+    ];
+    let bootOrder = [];
     let bootDragSrc = null;
+
+    function parseBootcmd(bootcmd) {
+        const order = [];
+        for (const t of bootTypes) {
+            if (bootcmd.indexOf(t.cmd) >= 0) {
+                order.push(t.type);
+            }
+        }
+        return order;
+    }
+
+    function buildBootcmd(order) {
+        const parts = [];
+        for (const t of order) {
+            const bt = bootTypes.find(b => b.type === t);
+            if (bt) parts.push('run ' + bt.cmd);
+        }
+        return parts.join('; ') + ';';
+    }
 
     async function loadBootOrder() {
         const list = document.getElementById('boot-list');
+        const varsBody = document.getElementById('boot-vars-body');
         list.innerHTML = '<div style="text-align:center;color:#aaa;padding:30px 0;">加载中...</div>';
+        varsBody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:#aaa;padding:20px 0;">加载中...</td></tr>';
         try {
             const resp = await fetch('/api/boot_order');
             if (!resp.ok) {
                 const err = await resp.json().catch(() => ({ error: 'HTTP ' + resp.status }));
                 list.innerHTML = '<div style="text-align:center;color:#d9534f;padding:30px 0;">❌ ' + (err.error || '加载失败') + '</div>';
+                varsBody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:#d9534f;padding:20px 0;">❌ ' + (err.error || '加载失败') + '</td></tr>';
                 appendLog('获取引导顺序失败: ' + (err.error || ''), 'error');
                 return;
             }
             const data = await resp.json();
-            bootEntries = data.entries || [];
+            const bootcmd = data.bootcmd || '';
+            bootOrder = data.order && data.order.length > 0 ? data.order : ['usb', 'nvme', 'sata'];
             renderBootList();
-            appendLog('引导顺序已加载: ' + bootEntries.length + ' 个引导项', 'success');
+            document.getElementById('boot-current-cmd').style.display = 'block';
+            document.getElementById('bootcmd-display').textContent = bootcmd || '(空)';
+            renderBootVars(data.vars || []);
+            appendLog('引导顺序已加载: ' + data.count + ' 个环境变量, 顺序=' + bootOrder.join(',') + ', bootcmd=' + bootcmd, 'success');
         } catch (e) {
             list.innerHTML = '<div style="text-align:center;color:#d9534f;padding:30px 0;">❌ ' + e.message + '</div>';
+            varsBody.innerHTML = '<tr><td colspan="2" style="text-align:center;color:#d9534f;padding:20px 0;">❌ ' + e.message + '</td></tr>';
             appendLog('获取引导顺序失败: ' + e.message, 'error');
         }
     }
@@ -696,32 +779,134 @@
     function renderBootList() {
         const list = document.getElementById('boot-list');
         const saveBtn = document.getElementById('btn-boot-save');
-        if (!bootEntries.length) {
+        if (!bootOrder.length) {
             list.innerHTML = '<div style="text-align:center;color:#aaa;padding:30px 0;">未找到引导项</div>';
             saveBtn.disabled = true;
             return;
         }
         list.innerHTML = '';
-        bootEntries.forEach((entry, i) => {
+        bootOrder.forEach((type, i) => {
+            const bt = bootTypes.find(b => b.type === type) || { label: type, icon: '❓', cmd: type };
             const item = document.createElement('div');
-            item.className = 'boot-item' + (i === 0 ? ' active' : '');
+            item.className = 'boot-item boot-type-' + type;
             item.draggable = true;
             item.dataset.index = i;
             item.innerHTML =
                 '<div class="boot-rank">' + (i + 1) + '</div>' +
-                '<span class="boot-type boot-type-' + entry.type + '">' + entry.type.toUpperCase() + '</span>' +
+                '<span class="boot-type-badge"><span class="badge-icon">' + bt.icon + '</span>' + bt.label + '</span>' +
                 '<div class="boot-info">' +
-                    '<div class="boot-label">' + escHtml(entry.label || entry.dev_name || '未知') + '</div>' +
-                    '<div class="boot-devpath">' + escHtml(entry.dev_path || '-') + '</div>' +
+                    '<div class="boot-label">' + bt.label + ' 引导</div>' +
+                    '<div class="boot-devpath">run ' + bt.cmd + '</div>' +
                 '</div>' +
                 '<span class="boot-handle">⋮⋮</span>';
             item.addEventListener('dragstart', onBootDragStart);
             item.addEventListener('dragover', onBootDragOver);
             item.addEventListener('drop', onBootDrop);
             item.addEventListener('dragend', onBootDragEnd);
+            item.addEventListener('click', function(e) {
+                if (e.target.classList.contains('boot-handle')) return;
+                document.querySelectorAll('.boot-item').forEach(it => it.classList.remove('active'));
+                this.classList.add('active');
+            });
             list.appendChild(item);
         });
         saveBtn.disabled = false;
+    }
+
+    let bootVarsOriginal = [];
+
+    function renderBootVars(vars) {
+        const body = document.getElementById('boot-vars-body');
+        bootVarsOriginal = vars.map(v => ({ name: v.name, value: v.value }));
+        document.getElementById('btn-var-save').disabled = true;
+        document.getElementById('btn-var-reset').disabled = true;
+        if (!vars.length) {
+            body.innerHTML = '<tr><td colspan="2" style="text-align:center;color:#aaa;padding:20px 0;">无环境变量</td></tr>';
+            return;
+        }
+        body.innerHTML = '';
+        vars.forEach((v, i) => {
+            const tr = document.createElement('tr');
+            tr.dataset.index = i;
+            const nameCell = '<td>' + escHtml(v.name) + '</td>';
+            const valueCell = '<td><input type="text" class="boot-var-input" value="' + escHtml(v.value).replace(/"/g, '&quot;') + '" data-name="' + escHtml(v.name) + '" data-original="' + escHtml(v.value).replace(/"/g, '&quot;') + '" oninput="onVarInputChange(this)"></td>';
+            tr.innerHTML = nameCell + valueCell;
+            body.appendChild(tr);
+        });
+    }
+
+    function onVarInputChange(input) {
+        const original = input.dataset.original;
+        const tr = input.closest('tr');
+        if (input.value !== original) {
+            tr.classList.add('changed');
+        } else {
+            tr.classList.remove('changed');
+        }
+        const hasChanges = document.querySelectorAll('#boot-vars-body tr.changed').length > 0;
+        document.getElementById('btn-var-save').disabled = !hasChanges;
+        document.getElementById('btn-var-reset').disabled = !hasChanges;
+    }
+
+    function resetBootVars() {
+        const inputs = document.querySelectorAll('#boot-vars-body .boot-var-input');
+        inputs.forEach(input => {
+            input.value = input.dataset.original;
+            input.closest('tr').classList.remove('changed');
+        });
+        document.getElementById('btn-var-save').disabled = true;
+        document.getElementById('btn-var-reset').disabled = true;
+        appendLog('已还原环境变量修改', 'info');
+    }
+
+    async function saveBootVars() {
+        const changedRows = document.querySelectorAll('#boot-vars-body tr.changed');
+        if (!changedRows.length) return;
+        const changes = [];
+        changedRows.forEach(tr => {
+            const input = tr.querySelector('.boot-var-input');
+            changes.push({ name: input.dataset.name, value: input.value });
+        });
+        const desc = changes.map(c => c.name + '=' + c.value).join('\n');
+        if (!confirm('⚠️ 警告：修改 U-Boot 环境变量可能导致设备无法启动！\n\n确认要保存以下 ' + changes.length + ' 个变量的修改？\n\n' + desc + '\n\n保存后需重启生效。')) return;
+
+        const saveBtn = document.getElementById('btn-var-save');
+        const resetBtn = document.getElementById('btn-var-reset');
+        saveBtn.disabled = true;
+        resetBtn.disabled = true;
+        saveBtn.textContent = '⏳ 保存中...';
+
+        let success = 0, fail = 0;
+        for (const c of changes) {
+            try {
+                const resp = await fetch('/api/uboot_setenv', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: c.name, value: c.value })
+                });
+                if (resp.ok) {
+                    success++;
+                    appendLog('环境变量已保存: ' + c.name + '=' + c.value, 'success');
+                } else {
+                    fail++;
+                    const err = await resp.json().catch(() => ({ error: 'HTTP ' + resp.status }));
+                    appendLog('保存环境变量失败: ' + c.name + ' - ' + (err.error || ''), 'error');
+                }
+            } catch (e) {
+                fail++;
+                appendLog('保存环境变量失败: ' + c.name + ' - ' + e.message, 'error');
+            }
+        }
+
+        saveBtn.textContent = '⚠️ 保存修改';
+        if (fail === 0) {
+            alert('✅ 全部 ' + success + ' 个变量保存成功，重启后生效');
+            loadBootOrder();
+        } else {
+            alert('⚠️ ' + success + ' 个成功, ' + fail + ' 个失败，请查看日志');
+            saveBtn.disabled = false;
+            resetBtn.disabled = false;
+        }
     }
 
     function onBootDragStart(e) {
@@ -733,8 +918,7 @@
     function onBootDragOver(e) {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
-        const items = document.querySelectorAll('.boot-item');
-        items.forEach(it => it.classList.remove('drag-over'));
+        document.querySelectorAll('.boot-item').forEach(it => it.classList.remove('drag-over'));
         e.currentTarget.classList.add('drag-over');
     }
 
@@ -742,10 +926,11 @@
         e.preventDefault();
         const targetIdx = parseInt(e.currentTarget.dataset.index);
         if (bootDragSrc === null || bootDragSrc === targetIdx) return;
-        const moved = bootEntries.splice(bootDragSrc, 1)[0];
-        bootEntries.splice(targetIdx, 0, moved);
+        const moved = bootOrder.splice(bootDragSrc, 1)[0];
+        bootOrder.splice(targetIdx, 0, moved);
         renderBootList();
-        appendLog('引导顺序已调整: ' + moved.label + ' 移至第 ' + (targetIdx + 1) + ' 位', 'info');
+        const bt = bootTypes.find(b => b.type === moved) || { label: moved, icon: '❓' };
+        appendLog('引导顺序已调整: ' + bt.icon + ' ' + bt.label + ' 移至第 ' + (targetIdx + 1) + ' 位', 'info');
     }
 
     function onBootDragEnd(e) {
@@ -758,24 +943,28 @@
 
     async function saveBootOrder() {
         const saveBtn = document.getElementById('btn-boot-save');
-        if (!bootEntries.length) return;
-        const labels = bootEntries.map(e => e.label);
-        const desc = bootEntries.map((e, i) => (i + 1) + '. ' + e.type.toUpperCase() + ' ' + e.label).join('\n');
-        if (!confirm('确认保存以下启动顺序？\n\n' + desc + '\n\n保存后需重启生效。')) return;
+        if (!bootOrder.length) return;
+        const bootcmd = buildBootcmd(bootOrder);
+        const desc = bootOrder.map((t, i) => {
+            const bt = bootTypes.find(b => b.type === t) || { label: t, icon: '❓' };
+            return (i + 1) + '. ' + bt.icon + ' ' + bt.label;
+        }).join('\n');
+        if (!confirm('确认保存以下启动顺序？\n\n' + desc + '\n\nbootcmd=' + bootcmd + '\n\n保存后需重启生效。')) return;
         saveBtn.disabled = true;
         saveBtn.textContent = '⏳ 保存中...';
         try {
             const resp = await fetch('/api/boot_order', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ order: labels })
+                body: JSON.stringify({ bootcmd: bootcmd })
             });
             const result = await resp.json();
             if (!resp.ok) {
                 appendLog('保存引导顺序失败: ' + (result.error || '未知错误'), 'error');
                 alert('保存失败: ' + (result.error || '未知错误'));
             } else {
-                appendLog('引导顺序保存成功: ' + (result.message || ''), 'success');
+                appendLog('引导顺序保存成功: bootcmd=' + bootcmd, 'success');
+                document.getElementById('bootcmd-display').textContent = bootcmd;
                 alert('✅ ' + (result.message || '保存成功'));
             }
         } catch (e) {

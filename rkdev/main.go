@@ -463,6 +463,7 @@ func main() {
 	http.HandleFunc("/api/upload_status", handleUploadStatus)
 	http.HandleFunc("/api/logs", handleLogs)
 	http.HandleFunc("/api/boot_order", handleBootOrder)
+	http.HandleFunc("/api/uboot_setenv", handleUbootSetenv)
 	http.HandleFunc("/api/reboot", handleReboot)
 
 	http.Handle("/api/terminal", websocket.Handler(handleTerminal))
@@ -558,288 +559,247 @@ func handleReboot(w http.ResponseWriter, r *http.Request) {
 func handleBootOrder(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		handleBootOrderGet(w, r)
+		handleUbootGet(w, r)
 	case http.MethodPost:
-		handleBootOrderSet(w, r)
+		handleUbootSet(w, r)
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "仅支持 GET/POST")
 	}
 }
 
-// ============ Boot Order ============
+// ============ U-Boot Environment (fw_printenv / fw_setenv) ============
 
-// BootEntry 表示一个引导项
-type BootEntry struct {
-	Index   int    `json:"index"`
-	DevPath string `json:"dev_path"`
-	DevName string `json:"dev_name"`
-	Type    string `json:"type"`  // usb / nvme / sata
-	Label   string `json:"label"` // 显示名称
-	Active  bool   `json:"active"`
+const (
+	mtdblockPath  = "/dev/mtdblock0"
+	fwEnvConfig   = "/etc/fw_env.config"
+	fwEnvContent  = "/dev/mtdblock0 0x3F8000  0x2000  0x8000"
+)
+
+// UbootVar 表示一个 U-Boot 环境变量
+type UbootVar struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
-// BootOrderResponse 是获取启动顺序的响应
-type BootOrderResponse struct {
-	Entries []BootEntry `json:"entries"`
-	Raw     string      `json:"raw"` // 原始 extlinux.conf 内容
+// UbootResponse 是获取 U-Boot 环境变量的响应
+type UbootResponse struct {
+	Vars    []UbootVar `json:"vars"`
+	Bootcmd string     `json:"bootcmd"`  // 当前 bootcmd 值
+	Order   []string   `json:"order"`    // 解析后的引导顺序（如 ["usb","nvme","sata"]）
+	Count   int        `json:"count"`
 }
 
-// bootConfigPath 是 extlinux.conf 的可能路径
-var bootConfigPaths = []string{
-	"/boot/extlinux/extlinux.conf",
-	"/extlinux/extlinux.conf",
+// bootCmdTokens 是 bootcmd 中支持的引导命令及显示名
+var bootCmdTokens = []struct {
+	Cmd   string
+	Label string
+	Type  string
+}{
+	{"bootcmd_usb", "USB", "usb"},
+	{"bootcmd_nvme", "NVMe", "nvme"},
+	{"bootcmd_scsi", "SATA/SCSI", "sata"},
+	{"bootcmd_emmc", "eMMC", "emmc"},
 }
 
-// findBootConfig 查找 extlinux.conf 文件
-func findBootConfig() (string, error) {
-	for _, p := range bootConfigPaths {
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
+// ensureFwEnvConfig 检测 /dev/mtdblock0 是否存在，若存在则检测 /etc/fw_env.config，
+// 不存在则写入默认配置
+func ensureFwEnvConfig() error {
+	if _, err := os.Stat(mtdblockPath); err != nil {
+		return fmt.Errorf("未检测到 %s，无法访问 U-Boot 环境变量", mtdblockPath)
 	}
-	return "", fmt.Errorf("未找到 extlinux.conf 配置文件（已尝试 %v）", bootConfigPaths)
+
+	if _, err := os.Stat(fwEnvConfig); err != nil {
+		advLog("warn", "[UBOOT] %s 不存在，写入默认配置: %s", fwEnvConfig, fwEnvContent)
+		if err := os.WriteFile(fwEnvConfig, []byte(fwEnvContent+"\n"), 0644); err != nil {
+			return fmt.Errorf("写入 %s 失败: %v", fwEnvConfig, err)
+		}
+		advLog("success", "[UBOOT] %s 已写入", fwEnvConfig)
+	}
+	return nil
 }
 
-// parseBootConfig 解析 extlinux.conf，提取引导项列表
-// extlinux.conf 格式示例：
-//   label kernel-1
-//     menu label USB Boot
-//     linux /boot/Image
-//     devpath /dev/sda1
-//
-//   label kernel-2
-//     menu label NVMe Boot
-//     linux /boot/Image
-//     devpath /dev/nvme0n1p1
-func parseBootConfig(content string) []BootEntry {
-	var entries []BootEntry
-	var current *BootEntry
-
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		if strings.HasPrefix(line, "label") {
-			if current != nil {
-				entries = append(entries, *current)
-			}
-			current = &BootEntry{Index: len(entries)}
-		}
-
-		if current == nil {
-			continue
-		}
-
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-
-		switch fields[0] {
-		case "menu":
-			if len(fields) >= 3 && fields[1] == "label" {
-				current.Label = strings.Join(fields[2:], " ")
-			}
-		case "devpath":
-			current.DevPath = fields[1]
-			current.DevName = filepath.Base(fields[1])
-			current.Type = detectBootType(fields[1])
-		}
-	}
-	if current != nil {
-		entries = append(entries, *current)
-	}
-	return entries
-}
-
-// detectBootType 根据设备路径推断引导类型
-func detectBootType(devPath string) string {
-	dp := strings.ToLower(devPath)
-	if strings.Contains(dp, "nvme") {
-		return "nvme"
-	}
-	if strings.Contains(dp, "sd") {
-		return "usb"
-	}
-	return "sata"
-}
-
-// bootTypeIcon 返回引导类型的图标
-func bootTypeIcon(t string) string {
-	switch t {
-	case "usb":
-		return "USB"
-	case "nvme":
-		return "NVMe"
-	case "sata":
-		return "SATA"
-	default:
-		return "DISK"
-	}
-}
-
-// handleBootOrderGet 处理 GET /api/boot_order
-func handleBootOrderGet(w http.ResponseWriter, r *http.Request) {
-	cfgPath, err := findBootConfig()
+// runFwPrintenv 调用 fw_printenv 获取所有 U-Boot 环境变量
+func runFwPrintenv() ([]UbootVar, error) {
+	out, err := exec.Command("fw_printenv").CombinedOutput()
 	if err != nil {
-		advLog("error", "[BOOT] %v", err)
+		return nil, fmt.Errorf("fw_printenv 执行失败: %v, output: %s", err, string(out))
+	}
+
+	var vars []UbootVar
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		idx := strings.Index(line, "=")
+		if idx < 0 {
+			continue
+		}
+		vars = append(vars, UbootVar{
+			Name:  line[:idx],
+			Value: line[idx+1:],
+		})
+	}
+	return vars, nil
+}
+
+// handleUbootGet 处理 GET /api/boot_order
+// 1. 检测 /dev/mtdblock0 是否存在
+// 2. 检测 /etc/fw_env.config 是否存在，不存在则写入
+// 3. 调用 fw_printenv 获取所有环境变量
+// 4. 解析 bootcmd 提取引导顺序
+func handleUbootGet(w http.ResponseWriter, r *http.Request) {
+	if err := ensureFwEnvConfig(); err != nil {
+		advLog("error", "[UBOOT] %v", err)
 		jsonErr(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	data, err := os.ReadFile(cfgPath)
+	vars, err := runFwPrintenv()
 	if err != nil {
-		advLog("error", "[BOOT] 读取 %s 失败: %v", cfgPath, err)
-		jsonErr(w, http.StatusInternalServerError, "读取引导配置失败: "+err.Error())
+		advLog("error", "[UBOOT] %v", err)
+		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	entries := parseBootConfig(string(data))
-	for i := range entries {
-		entries[i].Active = i == 0 // 第一项为默认启动项
+	bootcmd := ""
+	for _, v := range vars {
+		if v.Name == "bootcmd" {
+			bootcmd = v.Value
+			break
+		}
 	}
 
-	advLog("info", "[BOOT] 获取启动顺序成功: %s, %d 个引导项", cfgPath, len(entries))
-	for _, e := range entries {
-		advLog("data", "[BOOT] #%d %s [%s] -> %s", e.Index, e.Label, bootTypeIcon(e.Type), e.DevPath)
+	order := parseBootcmdOrder(bootcmd)
+
+	advLog("info", "[UBOOT] 获取环境变量成功: %d 个变量, bootcmd=%s, 顺序=%v", len(vars), bootcmd, order)
+	for _, v := range vars {
+		advLog("data", "[UBOOT] %s=%s", v.Name, v.Value)
 	}
 
-	jsonOK(w, BootOrderResponse{
-		Entries: entries,
-		Raw:     string(data),
+	jsonOK(w, UbootResponse{
+		Vars:    vars,
+		Bootcmd: bootcmd,
+		Order:   order,
+		Count:   len(vars),
 	})
 }
 
-// handleBootOrderSet 处理 POST /api/boot_order
-// 请求体 JSON: {"order": ["label1", "label2", "label3"]}
-// 根据新的 label 顺序重写 extlinux.conf
-func handleBootOrderSet(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		jsonErr(w, http.StatusMethodNotAllowed, "仅支持 POST")
-		return
-	}
-
+// handleUbootSet 处理 POST /api/boot_order
+// 请求体 JSON: {"bootcmd": "run bootcmd_usb; run bootcmd_nvme; ..."}
+// 调用 fw_setenv bootcmd <value> 写入
+func handleUbootSet(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Order []string `json:"order"`
+		Bootcmd string `json:"bootcmd"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, http.StatusBadRequest, "解析请求失败: "+err.Error())
 		return
 	}
 
-	if len(req.Order) == 0 {
-		jsonErr(w, http.StatusBadRequest, "启动顺序不能为空")
+	if req.Bootcmd == "" {
+		jsonErr(w, http.StatusBadRequest, "bootcmd 不能为空")
 		return
 	}
 
-	cfgPath, err := findBootConfig()
-	if err != nil {
-		advLog("error", "[BOOT] %v", err)
+	if err := ensureFwEnvConfig(); err != nil {
+		advLog("error", "[UBOOT] %v", err)
 		jsonErr(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	data, err := os.ReadFile(cfgPath)
+	advLog("warn", "[UBOOT] 准备写入 bootcmd=%s", req.Bootcmd)
+
+	out, err := exec.Command("fw_setenv", "bootcmd", req.Bootcmd).CombinedOutput()
 	if err != nil {
-		advLog("error", "[BOOT] 读取 %s 失败: %v", cfgPath, err)
-		jsonErr(w, http.StatusInternalServerError, "读取引导配置失败: "+err.Error())
+		advLog("error", "[UBOOT] fw_setenv 失败: %v, output: %s", err, string(out))
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("fw_setenv 失败: %v, output: %s", err, string(out)))
 		return
 	}
 
-	newContent, err := reorderBootConfig(string(data), req.Order)
-	if err != nil {
-		advLog("error", "[BOOT] 重排引导顺序失败: %v", err)
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	// 先备份原文件
-	backupPath := cfgPath + ".bak"
-	os.WriteFile(backupPath, data, 0644)
-
-	if err := os.WriteFile(cfgPath, []byte(newContent), 0644); err != nil {
-		advLog("error", "[BOOT] 写入 %s 失败: %v", cfgPath, err)
-		jsonErr(w, http.StatusInternalServerError, "写入引导配置失败: "+err.Error())
-		return
-	}
-
-	advLog("success", "[BOOT] 启动顺序已更新: %v (备份: %s)", req.Order, backupPath)
-	log.Printf("[BOOT] 启动顺序已更新: %v", req.Order)
-	jsonOK(w, map[string]string{"message": "启动顺序已更新，重启后生效"})
+	advLog("success", "[UBOOT] bootcmd 已更新: %s", req.Bootcmd)
+	log.Printf("[UBOOT] bootcmd 已更新: %s", req.Bootcmd)
+	jsonOK(w, map[string]string{"message": "引导顺序已更新，重启后生效"})
 }
 
-// reorderBootConfig 根据给定的 label 顺序重写 extlinux.conf
-func reorderBootConfig(content string, order []string) (string, error) {
-	// 解析出所有 label block
-	type labelBlock struct {
-		label string
-		lines []string
+// parseBootcmdOrder 从 bootcmd 字符串中解析出引导顺序
+// bootcmd 格式: run bootcmd_usb; run bootcmd_emmc; run bootcmd_nvme; run bootcmd_scsi;
+// 按 bootcmd 中实际出现顺序返回引导类型列表
+func parseBootcmdOrder(bootcmd string) []string {
+	cmdToType := make(map[string]string)
+	for _, t := range bootCmdTokens {
+		cmdToType[t.Cmd] = t.Type
 	}
-
-	var header []string // label 之前的内容（timeout, default, prompt 等）
-	var blocks []labelBlock
-	var current *labelBlock
-	inLabel := false
-
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-
-		if strings.HasPrefix(trimmed, "label ") {
-			if current != nil {
-				blocks = append(blocks, *current)
-			}
-			current = &labelBlock{label: strings.TrimSpace(strings.TrimPrefix(trimmed, "label"))}
-			inLabel = true
-			current.lines = append(current.lines, line)
-			continue
-		}
-
-		if !inLabel {
-			header = append(header, line)
-		} else {
-			if current != nil {
-				current.lines = append(current.lines, line)
+	var order []string
+	for _, segment := range strings.Split(bootcmd, ";") {
+		segment = strings.TrimSpace(segment)
+		for cmd, typ := range cmdToType {
+			if strings.Contains(segment, cmd) {
+				order = append(order, typ)
+				break
 			}
 		}
 	}
-	if current != nil {
-		blocks = append(blocks, *current)
-	}
+	return order
+}
 
-	// 构建 label -> block 映射
-	blockMap := make(map[string]labelBlock)
-	for _, b := range blocks {
-		blockMap[b.label] = b
+// buildBootcmd 根据引导类型顺序列表构建 bootcmd 字符串
+// 例如 ["usb", "nvme", "sata"] -> "run bootcmd_usb; run bootcmd_nvme; run bootcmd_scsi;"
+func buildBootcmd(order []string) string {
+	var parts []string
+	typeMap := make(map[string]string)
+	for _, t := range bootCmdTokens {
+		typeMap[t.Type] = t.Cmd
 	}
-
-	// 验证所有请求的 label 都存在
-	for _, l := range order {
-		if _, ok := blockMap[l]; !ok {
-			return "", fmt.Errorf("引导项 %q 不存在", l)
+	for _, t := range order {
+		if cmd, ok := typeMap[t]; ok {
+			parts = append(parts, "run "+cmd)
 		}
 	}
+	return strings.Join(parts, "; ") + ";"
+}
 
-	// 按新顺序重新组装
-	var result []string
-	result = append(result, header...)
-
-	// 更新 default 行为第一项
-	for i, h := range result {
-		trimmed := strings.TrimSpace(h)
-		if strings.HasPrefix(trimmed, "default ") {
-			result[i] = "default " + order[0]
-		}
+// handleUbootSetenv 处理 POST /api/uboot_setenv
+// 请求体 JSON: {"name": "变量名", "value": "变量值"}
+// 调用 fw_setenv <name> <value> 写入单个 U-Boot 环境变量
+func handleUbootSetenv(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonErr(w, http.StatusMethodNotAllowed, "仅支持 POST")
+		return
 	}
 
-	for _, l := range order {
-		if b, ok := blockMap[l]; ok {
-			result = append(result, b.lines...)
-		}
+	var req struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, http.StatusBadRequest, "解析请求失败: "+err.Error())
+		return
 	}
 
-	return strings.Join(result, "\n"), nil
+	if req.Name == "" {
+		jsonErr(w, http.StatusBadRequest, "变量名不能为空")
+		return
+	}
+
+	if err := ensureFwEnvConfig(); err != nil {
+		advLog("error", "[UBOOT] %v", err)
+		jsonErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	advLog("warn", "[UBOOT] 准备写入环境变量: %s=%s", req.Name, req.Value)
+
+	out, err := exec.Command("fw_setenv", req.Name, req.Value).CombinedOutput()
+	if err != nil {
+		advLog("error", "[UBOOT] fw_setenv %s 失败: %v, output: %s", req.Name, err, string(out))
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("fw_setenv %s 失败: %v, output: %s", req.Name, err, string(out)))
+		return
+	}
+
+	advLog("success", "[UBOOT] 环境变量已写入: %s=%s", req.Name, req.Value)
+	log.Printf("[UBOOT] 环境变量已写入: %s=%s", req.Name, req.Value)
+	jsonOK(w, map[string]string{"message": "环境变量 " + req.Name + " 已保存，重启后生效"})
 }
 
 // ============ Upload & Flash ============
