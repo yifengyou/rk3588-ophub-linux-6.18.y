@@ -22,5 +22,6 @@ openssh-server
 openssh-sftp-server
 pciutils
 sgdisk
+u-boot-tools
 util-linux
 xfsprogs

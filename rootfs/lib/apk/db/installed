@@ -3844,6 +3844,70 @@ R:ssl_client
 a:0:0:755
 Z:Q1juklsxJUBhfQunt7L+qrW/iZ9nw=
 
+C:Q1eOuPsYnWFBs3FjrmI45Duks/JT4=
+P:u-boot-tools
+V:2026.04-r1
+A:aarch64
+S:723387
+I:2154331
+T:u-boot bootloader utility tools
+U:https://www.denx.de/wiki/U-Boot/
+L:GPL-2.0-or-later OFL-1.1 BSD-2-Clause BSD-3-Clause WITH eCos-exception-2.0 IBM-pibs ISC LGPL-2.0-only LGPL-2.1-only X11
+o:u-boot
+m:Milan P. Stanić <mps@arvanta.net>
+t:1776763062
+c:c461c239f209de2912a48ffbc3f53918df4c86aa
+D:so:libc.musl-aarch64.so.1 so:libcrypto.so.3 so:libssl.so.3
+p:uboot-tools cmd:dumpimage=2026.04-r1 cmd:fit_check_sign=2026.04-r1 cmd:fit_info=2026.04-r1 cmd:fw_printenv=2026.04-r1 cmd:fw_setenv=2026.04-r1 cmd:gdbcont=2026.04-r1 cmd:gdbsend=2026.04-r1 cmd:gen_eth_addr=2026.04-r1 cmd:img2srec=2026.04-r1 cmd:mkenvimage=2026.04-r1 cmd:mkimage=2026.04-r1 cmd:ncb=2026.04-r1 cmd:proftool=2026.04-r1
+r:uboot-tools
+F:usr
+F:usr/bin
+R:dumpimage
+a:0:0:755
+Z:Q15zRRY7YsetRk+1BbCkyuQk/WpxA=
+R:fit_check_sign
+a:0:0:755
+Z:Q1Hg1NLuMBQxI6RKfwTHLuspCdfz4=
+R:fit_info
+a:0:0:755
+Z:Q1rAkFeQTrbUQ8ck9bMh0AssLmKgw=
+R:fw_printenv
+a:0:0:755
+Z:Q1KxLaW+LCvWvkUYAc5p6QVaSLqaw=
+R:fw_setenv
+a:0:0:777
+Z:Q1xGuzZ7gL3i1x/D6HUxfQyCm0Cjc=
+R:gdbcont
+a:0:0:755
+Z:Q1/RmaF/wkRo0rFlJVsYK3nDZpZdo=
+R:gdbsend
+a:0:0:755
+Z:Q1mZhZIaeeGPBSyh/+awQ6Mp+jhsI=
+R:gen_eth_addr
+a:0:0:755
+Z:Q1HO+98xlAx4mvIL3TBLDB+jJ6lNA=
+R:img2srec
+a:0:0:755
+Z:Q1hAIeUvirez/a/RGyfyYXh+8LaYQ=
+R:mkenvimage
+a:0:0:755
+Z:Q1rTb4VYlcLILptqnXzAveigPN9/4=
+R:mkimage
+a:0:0:755
+Z:Q1mkoNTAoHPSPn/jrMeCFyHQG0EwM=
+R:ncb
+a:0:0:755
+Z:Q14i41LcoUZZpPjn071Hr2N869Ojc=
+R:proftool
+a:0:0:755
+Z:Q1s6HVQ1wEAdW7w+j/2Dr8r3MsE2w=
+F:usr/share
+F:usr/share/doc
+F:usr/share/doc/u-boot
+F:usr/share/doc/u-boot/examples
+R:fw_env.config
+Z:Q1xeDrxDtZ5k0ZYupgV0cxB3HXJCI=
+
 C:Q1hqHDjVfnvGH3svRh90FIzLpP8t8=
 P:umount
 V:2.42.1-r0

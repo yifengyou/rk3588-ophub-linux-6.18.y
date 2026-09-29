@@ -462,6 +462,7 @@ func main() {
 	http.HandleFunc("/api/progress", handleProgress)
 	http.HandleFunc("/api/upload_status", handleUploadStatus)
 	http.HandleFunc("/api/logs", handleLogs)
+	http.HandleFunc("/api/boot_order", handleBootOrder)
 	http.HandleFunc("/api/reboot", handleReboot)
 
 	http.Handle("/api/terminal", websocket.Handler(handleTerminal))
@@ -551,6 +552,294 @@ func handleReboot(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(500 * time.Millisecond)
 		exec.Command("/sbin/reboot").Run()
 	}()
+}
+
+// handleBootOrder 根据 HTTP 方法分发到 GET/POST 处理函数
+func handleBootOrder(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		handleBootOrderGet(w, r)
+	case http.MethodPost:
+		handleBootOrderSet(w, r)
+	default:
+		jsonErr(w, http.StatusMethodNotAllowed, "仅支持 GET/POST")
+	}
+}
+
+// ============ Boot Order ============
+
+// BootEntry 表示一个引导项
+type BootEntry struct {
+	Index   int    `json:"index"`
+	DevPath string `json:"dev_path"`
+	DevName string `json:"dev_name"`
+	Type    string `json:"type"`  // usb / nvme / sata
+	Label   string `json:"label"` // 显示名称
+	Active  bool   `json:"active"`
+}
+
+// BootOrderResponse 是获取启动顺序的响应
+type BootOrderResponse struct {
+	Entries []BootEntry `json:"entries"`
+	Raw     string      `json:"raw"` // 原始 extlinux.conf 内容
+}
+
+// bootConfigPath 是 extlinux.conf 的可能路径
+var bootConfigPaths = []string{
+	"/boot/extlinux/extlinux.conf",
+	"/extlinux/extlinux.conf",
+}
+
+// findBootConfig 查找 extlinux.conf 文件
+func findBootConfig() (string, error) {
+	for _, p := range bootConfigPaths {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("未找到 extlinux.conf 配置文件（已尝试 %v）", bootConfigPaths)
+}
+
+// parseBootConfig 解析 extlinux.conf，提取引导项列表
+// extlinux.conf 格式示例：
+//   label kernel-1
+//     menu label USB Boot
+//     linux /boot/Image
+//     devpath /dev/sda1
+//
+//   label kernel-2
+//     menu label NVMe Boot
+//     linux /boot/Image
+//     devpath /dev/nvme0n1p1
+func parseBootConfig(content string) []BootEntry {
+	var entries []BootEntry
+	var current *BootEntry
+
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		if strings.HasPrefix(line, "label") {
+			if current != nil {
+				entries = append(entries, *current)
+			}
+			current = &BootEntry{Index: len(entries)}
+		}
+
+		if current == nil {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+
+		switch fields[0] {
+		case "menu":
+			if len(fields) >= 3 && fields[1] == "label" {
+				current.Label = strings.Join(fields[2:], " ")
+			}
+		case "devpath":
+			current.DevPath = fields[1]
+			current.DevName = filepath.Base(fields[1])
+			current.Type = detectBootType(fields[1])
+		}
+	}
+	if current != nil {
+		entries = append(entries, *current)
+	}
+	return entries
+}
+
+// detectBootType 根据设备路径推断引导类型
+func detectBootType(devPath string) string {
+	dp := strings.ToLower(devPath)
+	if strings.Contains(dp, "nvme") {
+		return "nvme"
+	}
+	if strings.Contains(dp, "sd") {
+		return "usb"
+	}
+	return "sata"
+}
+
+// bootTypeIcon 返回引导类型的图标
+func bootTypeIcon(t string) string {
+	switch t {
+	case "usb":
+		return "USB"
+	case "nvme":
+		return "NVMe"
+	case "sata":
+		return "SATA"
+	default:
+		return "DISK"
+	}
+}
+
+// handleBootOrderGet 处理 GET /api/boot_order
+func handleBootOrderGet(w http.ResponseWriter, r *http.Request) {
+	cfgPath, err := findBootConfig()
+	if err != nil {
+		advLog("error", "[BOOT] %v", err)
+		jsonErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		advLog("error", "[BOOT] 读取 %s 失败: %v", cfgPath, err)
+		jsonErr(w, http.StatusInternalServerError, "读取引导配置失败: "+err.Error())
+		return
+	}
+
+	entries := parseBootConfig(string(data))
+	for i := range entries {
+		entries[i].Active = i == 0 // 第一项为默认启动项
+	}
+
+	advLog("info", "[BOOT] 获取启动顺序成功: %s, %d 个引导项", cfgPath, len(entries))
+	for _, e := range entries {
+		advLog("data", "[BOOT] #%d %s [%s] -> %s", e.Index, e.Label, bootTypeIcon(e.Type), e.DevPath)
+	}
+
+	jsonOK(w, BootOrderResponse{
+		Entries: entries,
+		Raw:     string(data),
+	})
+}
+
+// handleBootOrderSet 处理 POST /api/boot_order
+// 请求体 JSON: {"order": ["label1", "label2", "label3"]}
+// 根据新的 label 顺序重写 extlinux.conf
+func handleBootOrderSet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonErr(w, http.StatusMethodNotAllowed, "仅支持 POST")
+		return
+	}
+
+	var req struct {
+		Order []string `json:"order"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, http.StatusBadRequest, "解析请求失败: "+err.Error())
+		return
+	}
+
+	if len(req.Order) == 0 {
+		jsonErr(w, http.StatusBadRequest, "启动顺序不能为空")
+		return
+	}
+
+	cfgPath, err := findBootConfig()
+	if err != nil {
+		advLog("error", "[BOOT] %v", err)
+		jsonErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		advLog("error", "[BOOT] 读取 %s 失败: %v", cfgPath, err)
+		jsonErr(w, http.StatusInternalServerError, "读取引导配置失败: "+err.Error())
+		return
+	}
+
+	newContent, err := reorderBootConfig(string(data), req.Order)
+	if err != nil {
+		advLog("error", "[BOOT] 重排引导顺序失败: %v", err)
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// 先备份原文件
+	backupPath := cfgPath + ".bak"
+	os.WriteFile(backupPath, data, 0644)
+
+	if err := os.WriteFile(cfgPath, []byte(newContent), 0644); err != nil {
+		advLog("error", "[BOOT] 写入 %s 失败: %v", cfgPath, err)
+		jsonErr(w, http.StatusInternalServerError, "写入引导配置失败: "+err.Error())
+		return
+	}
+
+	advLog("success", "[BOOT] 启动顺序已更新: %v (备份: %s)", req.Order, backupPath)
+	log.Printf("[BOOT] 启动顺序已更新: %v", req.Order)
+	jsonOK(w, map[string]string{"message": "启动顺序已更新，重启后生效"})
+}
+
+// reorderBootConfig 根据给定的 label 顺序重写 extlinux.conf
+func reorderBootConfig(content string, order []string) (string, error) {
+	// 解析出所有 label block
+	type labelBlock struct {
+		label string
+		lines []string
+	}
+
+	var header []string // label 之前的内容（timeout, default, prompt 等）
+	var blocks []labelBlock
+	var current *labelBlock
+	inLabel := false
+
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmed, "label ") {
+			if current != nil {
+				blocks = append(blocks, *current)
+			}
+			current = &labelBlock{label: strings.TrimSpace(strings.TrimPrefix(trimmed, "label"))}
+			inLabel = true
+			current.lines = append(current.lines, line)
+			continue
+		}
+
+		if !inLabel {
+			header = append(header, line)
+		} else {
+			if current != nil {
+				current.lines = append(current.lines, line)
+			}
+		}
+	}
+	if current != nil {
+		blocks = append(blocks, *current)
+	}
+
+	// 构建 label -> block 映射
+	blockMap := make(map[string]labelBlock)
+	for _, b := range blocks {
+		blockMap[b.label] = b
+	}
+
+	// 验证所有请求的 label 都存在
+	for _, l := range order {
+		if _, ok := blockMap[l]; !ok {
+			return "", fmt.Errorf("引导项 %q 不存在", l)
+		}
+	}
+
+	// 按新顺序重新组装
+	var result []string
+	result = append(result, header...)
+
+	// 更新 default 行为第一项
+	for i, h := range result {
+		trimmed := strings.TrimSpace(h)
+		if strings.HasPrefix(trimmed, "default ") {
+			result[i] = "default " + order[0]
+		}
+	}
+
+	for _, l := range order {
+		if b, ok := blockMap[l]; ok {
+			result = append(result, b.lines...)
+		}
+	}
+
+	return strings.Join(result, "\n"), nil
 }
 
 // ============ Upload & Flash ============
