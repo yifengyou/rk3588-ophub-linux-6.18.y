@@ -26,6 +26,10 @@
         .card { background: #fff; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.05); text-align: center; }
         .card h1 { color: #2c5aa0; font-size: 32px; margin-bottom: 25px; }
         .ver-tag { font-size: 12px; font-weight: 600; color: #5c7ebf; background: #eef2fa; border: 1px solid #d4dfee; padding: 2px 10px; border-radius: 12px; vertical-align: middle; margin-left: 6px; letter-spacing: .5px; }
+        .subtitle { color: #666; font-size: 14px; margin-bottom: 10px; }
+        .format-desc { color: #555; font-size: 13px; line-height: 1.8; }
+        .fmt { font-family: "Cascadia Code", "Fira Code", Menlo, monospace; color: #2c5aa0; font-weight: 600; }
+        .fmt-note { color: #555; font-size: 13px; }
         .form-group { margin: 20px 0; display: flex; justify-content: center; align-items: center; gap: 10px; flex-wrap: wrap; }
         select, input[type="file"], button { padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
         button.primary { background: #2c5aa0; color: #fff; border: none; cursor: pointer; }
@@ -131,8 +135,8 @@
         <div class="adv-top">
             <div class="card">
                 <h1>彼度云G98/Z98固件更新助手 <span class="ver-tag">v{{.BuildTime}}</span></h1>
-                <p>选择目标存储设备 (U盘、SATA盘、M2 NVME盘)，然后选择固件文件进行刷写。</p>
-                <p>支持 <strong>.img / .bin</strong> 固件及 <strong>.img.gz / .bin.gz</strong> 压缩包（上传时自动解压）。</p>
+                <p class="subtitle">选择目标存储设备，上传固件文件即可一键刷写</p>
+                <p class="format-desc">支持 <span class="fmt">.img / .bin</span> 单文件固件，支持常见压缩文件，支持多分区打包固件<span class="fmt-note">（自动解压并解析分区表）</span>。</p>
 
                 <div class="form-group">
                     <label for="device-select"><strong>目标设备:</strong></label>
@@ -164,9 +168,9 @@
                     <h3>⚠️ 高危操作注意</h3>
                     <ul>
                         <li><strong>过滤规则</strong>：仅显示 U盘、SATA盘、M2 NVME 设备。</li>
-                        <li><strong>文件类型</strong>：仅支持 .img / .bin 固件及 .img.gz / .bin.gz 压缩包（gzip 自动解压），其他类型将被拒绝。</li>
+                        <li><strong>文件类型</strong>：支持 .img / .bin 单文件固件，支持常见压缩文件，支持多分区固件。</li>
                         <li><strong>数据丢失风险</strong>：刷写操作将覆盖目标设备上的所有数据！</li>
-                        <li><strong>写入方式</strong>：文件先暂存至 /tmp/，再以 4MB 块逐块写入 (等效 dd bs=4M oflag=sync)。</li>
+                        <li><strong>写入方式</strong>：文件暂存至 /tmp/，以 4MB 块逐块写入 (等效 dd bs=4M oflag=sync)。</li>
                     </ul>
                 </div>
                 <div class="adv-toggle">
