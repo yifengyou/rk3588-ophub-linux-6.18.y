@@ -493,25 +493,20 @@
                 const s = await r.json();
                 if (uploadPollTimer !== timer || !s.active) return;
                 const label = labels[s.stage] || '处理中';
-                let line = `${label} ...`;
-                let logLine = label;
-                if (s.name) { line += `\n文件: ${s.name}`; logLine += ' 文件: ' + s.name; }
+                let line = label;
+                if (s.name) line += ' 文件: ' + s.name;
                 if (s.stage === 'extracting') {
-                    line += `\n已接收 ${mb(s.received)} MB，已解压 ${s.extract_elapsed.toFixed(0)} 秒，请稍候...`;
-                    logLine += ' 已接收 ' + mb(s.received) + ' MB，已解压 ' + s.extract_elapsed.toFixed(0) + ' 秒，请稍候...';
+                    line += ' 已接收 ' + mb(s.received) + ' MB，已解压 ' + s.extract_elapsed.toFixed(0) + ' 秒，请稍候...';
                 } else {
-                    let recv = s.total > 0
-                        ? `\n已接收: ${mb(s.received)} / ${mb(s.total)} MB (${s.progress.toFixed(0)}%)`
-                        : `\n已接收: ${mb(s.received)} MB`;
-                    line += recv + `\n速度: ${mb(s.speed)} MB/s`;
-                    logLine += ' 已接收: ' + (s.total > 0 ? mb(s.received) + ' / ' + mb(s.total) + ' MB (' + s.progress.toFixed(0) + '%)' : mb(s.received) + ' MB') + ' 速度: ' + mb(s.speed) + ' MB/s';
+                    line += ' 已接收: ' + (s.total > 0 ? mb(s.received) + ' / ' + mb(s.total) + ' MB (' + s.progress.toFixed(0) + '%)' : mb(s.received) + ' MB');
+                    line += ' 速度: ' + mb(s.speed) + ' MB/s';
                 }
                 showResult(line, "info");
                 const now = Date.now();
                 if (s.stage !== lastStage || now - lastLogTime >= 3000) {
                     lastLogTime = now;
                     if (s.stage !== lastStage) lastStage = s.stage;
-                    appendLog(logLine, 'info');
+                    appendLog(line, 'info');
                 }
             } catch {}
         }, 500);
