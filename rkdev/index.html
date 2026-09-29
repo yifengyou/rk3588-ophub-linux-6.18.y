@@ -259,6 +259,30 @@
         .smart-raw-output::-webkit-scrollbar-track { background: #161b22; border-radius: 4px; }
         .smart-raw-output::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
         .smart-raw-output::-webkit-scrollbar-thumb:hover { background: #484f58; }
+
+        .hw-section { margin-bottom: 20px; }
+        .hw-section-header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: #f0f4fa; border-radius: 8px; cursor: pointer; transition: all .2s; user-select: none; }
+        .hw-section-header:hover { background: #e3eaf5; }
+        .hw-section-icon { font-size: 20px; }
+        .hw-section-title { font-size: 16px; font-weight: 600; color: #2c5aa0; flex: 1; }
+        .hw-section-hint { font-size: 12px; color: #999; }
+        .hw-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; margin: 12px 0; }
+        .hw-item { background: #f8faff; border: 1px solid #e8eef5; border-radius: 6px; padding: 10px 14px; }
+        .hw-item-label { font-size: 11px; color: #888; margin-bottom: 4px; }
+        .hw-item-value { font-size: 14px; font-weight: 600; color: #333; }
+        .hw-progress { width: 100%; height: 6px; background: #e9ecef; border-radius: 3px; margin-top: 4px; overflow: hidden; }
+        .hw-progress .hw-progress-fill { height: 100%; border-radius: 3px; transition: width .3s; }
+        .hw-progress .hw-progress-green { background: linear-gradient(90deg, #28a745, #5cb85c); }
+        .hw-progress .hw-progress-blue { background: linear-gradient(90deg, #2c5aa0, #5b8fd6); }
+        .hw-progress .hw-progress-orange { background: linear-gradient(90deg, #ffc107, #ff9800); }
+        .hw-progress .hw-progress-red { background: linear-gradient(90deg, #dc3545, #e85a6a); }
+        .net-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
+        .net-table th { background: #2c5aa0; color: #fff; padding: 8px 12px; text-align: left; font-weight: 600; }
+        .net-table td { padding: 6px 12px; border-bottom: 1px solid #f0f0f0; }
+        .net-table tr:nth-child(even) td { background: #f8faff; }
+        .net-table tr:hover td { background: #eef2fa; }
+        .net-status-up { color: #28a745; font-weight: 600; }
+        .net-status-down { color: #999; }
         .smart-attrs-table { width: 100%; border-collapse: collapse; font-size: 12px; border: 1px solid #e0e0e0; border-radius: 6px; overflow: hidden; }
         .smart-attrs-table th { background: #2c5aa0; color: #fff; padding: 8px 12px; text-align: left; font-weight: 600; }
         .smart-attrs-table td { padding: 6px 12px; border-bottom: 1px solid #f0f0f0; }
@@ -404,7 +428,7 @@
 <div class="navbar">
     <div class="nav-tab active" data-panel="flash-panel" onclick="switchTab(this)">⚡ 固件刷写</div>
     <div class="nav-tab" data-panel="boot-panel" onclick="switchTab(this)">🔀 引导顺序</div>
-    <div class="nav-tab" data-panel="storage-panel" onclick="switchTab(this)">💾 存储检测</div>
+    <div class="nav-tab" data-panel="storage-panel" onclick="switchTab(this)">🔧 硬件检测</div>
     <div class="nav-tab" data-panel="update-panel" onclick="switchTab(this)">📦 更新助手</div>
     <div class="nav-tab" data-panel="backup-panel" onclick="switchTab(this)">💿 备份还原</div>
     <div class="nav-tab" data-panel="terminal-panel" onclick="switchTab(this)">💻 终端</div>
@@ -568,14 +592,44 @@
 
 <div id="storage-panel" class="panel">
     <div class="storage-card">
-        <h1>存储检测</h1>
-        <p class="subtitle">检测存储设备的分区表与 SMART 健康状态。调用 smartmontools (smartctl) 和 gdisk (sgdisk) 获取详细信息。</p>
+        <h1>硬件检测</h1>
+        <p class="subtitle">检测系统 CPU、内存、网络接口与存储设备的健康状态。</p>
         <div class="storage-actions">
-            <button type="button" class="btn-storage-refresh" onclick="loadStorageInfo()">🔄 刷新检测</button>
+            <button type="button" class="btn-storage-refresh" onclick="loadHardwareAll()">🔄 全部刷新</button>
             <button type="button" class="btn-storage-export" id="btn-storage-export" onclick="exportStorageReport()" disabled>📥 导出报告</button>
         </div>
-        <div id="storage-content">
-            <div class="storage-loading">点击「刷新检测」获取存储设备信息</div>
+
+        <div class="hw-section">
+            <div class="hw-section-header" onclick="loadCpuInfo()">
+                <span class="hw-section-icon">🖥️</span>
+                <span class="hw-section-title">CPU & 内存</span>
+                <span class="hw-section-hint">点击刷新</span>
+            </div>
+            <div id="cpu-content">
+                <div class="storage-loading">点击标题刷新 CPU 与内存信息</div>
+            </div>
+        </div>
+
+        <div class="hw-section">
+            <div class="hw-section-header" onclick="loadNetworkInfo()">
+                <span class="hw-section-icon">🌐</span>
+                <span class="hw-section-title">网络接口</span>
+                <span class="hw-section-hint">点击刷新</span>
+            </div>
+            <div id="network-content">
+                <div class="storage-loading">点击标题刷新网络接口信息</div>
+            </div>
+        </div>
+
+        <div class="hw-section">
+            <div class="hw-section-header" onclick="loadStorageInfo()">
+                <span class="hw-section-icon">💾</span>
+                <span class="hw-section-title">存储设备</span>
+                <span class="hw-section-hint">点击刷新</span>
+            </div>
+            <div id="storage-content">
+                <div class="storage-loading">点击标题刷新存储设备信息</div>
+            </div>
         </div>
     </div>
 </div>
@@ -1731,8 +1785,96 @@
         saveBtn.textContent = '💾 保存顺序';
     }
 
-    // ==================== Storage Detection ====================
+    // ==================== Hardware Detection ====================
     let storageDataCache = null;
+
+    function loadHardwareAll() {
+        loadCpuInfo();
+        loadNetworkInfo();
+        loadStorageInfo();
+    }
+
+    async function loadCpuInfo() {
+        const content = document.getElementById('cpu-content');
+        content.innerHTML = '<div class="storage-loading">⏳ 正在检测 CPU 与内存...</div>';
+        try {
+            const resp = await fetch('/api/cpu');
+            const d = await resp.json();
+            if (!resp.ok) {
+                content.innerHTML = '<div class="storage-loading">❌ 检测失败</div>';
+                return;
+            }
+            let html = '<div class="hw-grid">';
+            html += hwItem('型号', d.model || '-');
+            html += hwItem('核心数', d.cores + ' 核');
+            html += hwItem('架构', d.arch || '-');
+            html += hwItem('内核版本', d.kernel || '-');
+            html += hwItem('主机名', d.hostname || '-');
+            html += hwItem('运行时间', d.uptime || '-');
+            html += hwItem('温度', d.temp || '-');
+            var loadColor = d.loadAvg1 > d.cores ? 'hw-progress-red' : (d.loadAvg1 > d.cores * 0.7 ? 'hw-progress-orange' : 'hw-progress-green');
+            var loadPct = d.cores > 0 ? Math.min(d.loadAvg1 / d.cores * 100, 100) : 0;
+            html += hwItemProgress('负载 (1/5/15min)', d.loadAvg1.toFixed(2) + ' / ' + d.loadAvg5.toFixed(2) + ' / ' + d.loadAvg15.toFixed(2), loadPct, loadColor);
+            var cpuColor = d.cpuUsage > 90 ? 'hw-progress-red' : (d.cpuUsage > 70 ? 'hw-progress-orange' : 'hw-progress-green');
+            html += hwItemProgress('CPU 使用率', d.cpuUsage.toFixed(1) + '%', d.cpuUsage, cpuColor);
+            var memColor = d.memUsage > 90 ? 'hw-progress-red' : (d.memUsage > 70 ? 'hw-progress-orange' : 'hw-progress-blue');
+            html += hwItemProgress('内存使用', fmtBytes(d.memUsed) + ' / ' + fmtBytes(d.memTotal) + ' (' + d.memUsage.toFixed(1) + '%)', d.memUsage, memColor);
+            if (d.swapTotal > 0) {
+                var swapPct = d.swapTotal > 0 ? float64(d.swapUsed) / float64(d.swapTotal) * 100 : 0;
+                html += hwItemProgress('Swap 使用', fmtBytes(d.swapUsed) + ' / ' + fmtBytes(d.swapTotal) + ' (' + swapPct.toFixed(1) + '%)', swapPct, 'hw-progress-blue');
+            }
+            html += '</div>';
+            content.innerHTML = html;
+        } catch (e) {
+            content.innerHTML = '<div class="storage-loading">❌ 请求失败: ' + e.message + '</div>';
+        }
+    }
+
+    function hwItem(label, value) {
+        return '<div class="hw-item"><div class="hw-item-label">' + label + '</div><div class="hw-item-value">' + value + '</div></div>';
+    }
+
+    function hwItemProgress(label, value, pct, color) {
+        return '<div class="hw-item"><div class="hw-item-label">' + label + '</div><div class="hw-item-value">' + value + '</div><div class="hw-progress"><div class="hw-progress-fill ' + color + '" style="width:' + pct.toFixed(1) + '%"></div></div></div>';
+    }
+
+    function float64(v) { return v; }
+
+    async function loadNetworkInfo() {
+        const content = document.getElementById('network-content');
+        content.innerHTML = '<div class="storage-loading">⏳ 正在检测网络接口...</div>';
+        try {
+            const resp = await fetch('/api/network');
+            const d = await resp.json();
+            if (!resp.ok || d.error) {
+                content.innerHTML = '<div class="storage-loading">❌ ' + (d.error || '检测失败') + '</div>';
+                return;
+            }
+            if (!d.interfaces || !d.interfaces.length) {
+                content.innerHTML = '<div class="storage-loading">未检测到网络接口</div>';
+                return;
+            }
+            let html = '<table class="net-table"><thead><tr><th>接口</th><th>类型</th><th>状态</th><th>IP 地址</th><th>MAC 地址</th><th>速率</th><th>接收</th><th>发送</th></tr></thead><tbody>';
+            for (const iface of d.interfaces) {
+                var statusClass = iface.status === '已连接' ? 'net-status-up' : 'net-status-down';
+                var icon = iface.type === '无线' ? '📶' : iface.type === 'USB' ? '🔌' : '🔗';
+                html += '<tr>';
+                html += '<td>' + icon + ' ' + iface.name + '</td>';
+                html += '<td>' + iface.type + '</td>';
+                html += '<td class="' + statusClass + '">' + iface.status + '</td>';
+                html += '<td>' + (iface.ip || '-') + '</td>';
+                html += '<td style="font-family:monospace;font-size:11px;">' + (iface.mac || '-') + '</td>';
+                html += '<td>' + (iface.speed || '-') + '</td>';
+                html += '<td>' + fmtBytes(iface.rxBytes) + '</td>';
+                html += '<td>' + fmtBytes(iface.txBytes) + '</td>';
+                html += '</tr>';
+            }
+            html += '</tbody></table>';
+            content.innerHTML = html;
+        } catch (e) {
+            content.innerHTML = '<div class="storage-loading">❌ 请求失败: ' + e.message + '</div>';
+        }
+    }
 
     async function loadStorageInfo() {
         const content = document.getElementById('storage-content');

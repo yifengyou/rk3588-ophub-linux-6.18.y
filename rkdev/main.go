@@ -469,6 +469,8 @@ func main() {
 	http.HandleFunc("/api/boot_order", handleBootOrder)
 	http.HandleFunc("/api/uboot_setenv", handleUbootSetenv)
  	http.HandleFunc("/api/storage", handleStorage)
+ 	http.HandleFunc("/api/cpu", handleCpu)
+ 	http.HandleFunc("/api/network", handleNetwork)
  	http.HandleFunc("/api/update_check", handleUpdateCheck)
  	http.HandleFunc("/api/update_download", handleUpdateDownload)
 	http.HandleFunc("/api/update_cancel", handleUpdateCancel)
@@ -2465,6 +2467,283 @@ type StorageDevice struct {
 type StorageResponse struct {
 	Devices []StorageDevice `json:"devices"`
 	Error   string          `json:"error,omitempty"`
+}
+
+type CpuInfo struct {
+	Model       string  `json:"model"`
+	Cores       int     `json:"cores"`
+	Kernel      string  `json:"kernel"`
+	Uptime      string  `json:"uptime"`
+	LoadAvg1    float64 `json:"loadAvg1"`
+	LoadAvg5    float64 `json:"loadAvg5"`
+	LoadAvg15   float64 `json:"loadAvg15"`
+	CpuUsage    float64 `json:"cpuUsage"`
+	MemTotal    int64   `json:"memTotal"`
+	MemFree     int64   `json:"memFree"`
+	MemUsed     int64   `json:"memUsed"`
+	MemUsage    float64 `json:"memUsage"`
+	SwapTotal   int64   `json:"swapTotal"`
+	SwapFree    int64   `json:"swapFree"`
+	SwapUsed    int64   `json:"swapUsed"`
+	Temp        string  `json:"temp"`
+	Arch        string  `json:"arch"`
+	Hostname    string  `json:"hostname"`
+}
+
+type NetInterface struct {
+	Name      string `json:"name"`
+	Ip        string `json:"ip"`
+	Mac       string `json:"mac"`
+	Speed     string `json:"speed"`
+	Status    string `json:"status"`
+	Type      string `json:"type"`
+	RxBytes   int64  `json:"rxBytes"`
+	TxBytes   int64  `json:"txBytes"`
+	Link      string `json:"link"`
+}
+
+type NetworkInfo struct {
+	Interfaces []NetInterface `json:"interfaces"`
+	Error      string         `json:"error,omitempty"`
+}
+
+func handleCpu(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	info := CpuInfo{}
+
+	out, err := os.ReadFile("/proc/cpuinfo")
+	if err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.HasPrefix(line, "model name") || strings.HasPrefix(line, "Hardware") {
+				parts := strings.SplitN(line, ":", 2)
+				if len(parts) == 2 {
+					info.Model = strings.TrimSpace(parts[1])
+					break
+				}
+			}
+		}
+	}
+
+	out, err = os.ReadFile("/proc/cpuinfo")
+	if err == nil {
+		count := 0
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.HasPrefix(line, "processor") {
+				count++
+			}
+		}
+		info.Cores = count
+	}
+
+	out, _ = os.ReadFile("/proc/sys/kernel/osrelease")
+	info.Kernel = strings.TrimSpace(string(out))
+
+	out, _ = os.ReadFile("/proc/uptime")
+	if len(out) > 0 {
+		fields := strings.Fields(string(out))
+		if len(fields) > 0 {
+			upSecs, _ := strconv.ParseFloat(fields[0], 64)
+			days := int(upSecs) / 86400
+			hours := (int(upSecs) % 86400) / 3600
+			mins := (int(upSecs) % 3600) / 60
+			if days > 0 {
+				info.Uptime = fmt.Sprintf("%d天 %d小时 %d分钟", days, hours, mins)
+			} else if hours > 0 {
+				info.Uptime = fmt.Sprintf("%d小时 %d分钟", hours, mins)
+			} else {
+				info.Uptime = fmt.Sprintf("%d分钟", mins)
+			}
+		}
+	}
+
+	out, _ = os.ReadFile("/proc/loadavg")
+	if len(out) > 0 {
+		fields := strings.Fields(string(out))
+		if len(fields) >= 3 {
+			info.LoadAvg1, _ = strconv.ParseFloat(fields[0], 64)
+			info.LoadAvg5, _ = strconv.ParseFloat(fields[1], 64)
+			info.LoadAvg15, _ = strconv.ParseFloat(fields[2], 64)
+		}
+	}
+
+	out, _ = os.ReadFile("/proc/stat")
+	if len(out) > 0 {
+		lines := strings.Split(string(out), "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(line, "cpu ") {
+				fields := strings.Fields(line)
+				if len(fields) >= 5 {
+					user, _ := strconv.ParseInt(fields[1], 10, 64)
+					nice, _ := strconv.ParseInt(fields[2], 10, 64)
+					system, _ := strconv.ParseInt(fields[3], 10, 64)
+					idle, _ := strconv.ParseInt(fields[4], 10, 64)
+					total := user + nice + system + idle
+					if total > 0 {
+						info.CpuUsage = float64(total-idle) / float64(total) * 100
+					}
+				}
+				break
+			}
+		}
+	}
+
+	out, _ = os.ReadFile("/proc/meminfo")
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "MemTotal:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				info.MemTotal, _ = strconv.ParseInt(fields[1], 10, 64)
+				info.MemTotal *= 1024
+			}
+		} else if strings.HasPrefix(line, "MemFree:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				info.MemFree, _ = strconv.ParseInt(fields[1], 10, 64)
+				info.MemFree *= 1024
+			}
+		} else if strings.HasPrefix(line, "SwapTotal:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				info.SwapTotal, _ = strconv.ParseInt(fields[1], 10, 64)
+				info.SwapTotal *= 1024
+			}
+		} else if strings.HasPrefix(line, "SwapFree:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				info.SwapFree, _ = strconv.ParseInt(fields[1], 10, 64)
+				info.SwapFree *= 1024
+			}
+		}
+	}
+	info.MemUsed = info.MemTotal - info.MemFree
+	if info.MemTotal > 0 {
+		info.MemUsage = float64(info.MemUsed) / float64(info.MemTotal) * 100
+	}
+	info.SwapUsed = info.SwapTotal - info.SwapFree
+
+	temps, _ := filepath.Glob("/sys/class/thermal/thermal_zone*/temp")
+	for _, tpath := range temps {
+		data, err := os.ReadFile(tpath)
+		if err != nil {
+			continue
+		}
+		val := strings.TrimSpace(string(data))
+		tempMilli, _ := strconv.ParseInt(val, 10, 64)
+		if tempMilli > 0 {
+			info.Temp = fmt.Sprintf("%.1f°C", float64(tempMilli)/1000.0)
+			break
+		}
+	}
+
+	out, _ = os.ReadFile("/proc/sys/kernel/arch") 
+	if len(out) > 0 {
+		info.Arch = strings.TrimSpace(string(out))
+	}
+
+	out, _ = os.ReadFile("/etc/hostname")
+	info.Hostname = strings.TrimSpace(string(out))
+
+	json.NewEncoder(w).Encode(info)
+}
+
+func handleNetwork(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	var interfaces []NetInterface
+
+	out, err := exec.Command("ip", "-o", "addr", "show").Output()
+	if err != nil {
+		json.NewEncoder(w).Encode(NetworkInfo{Error: "ip 命令执行失败: " + err.Error()})
+		return
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		name := fields[1]
+		if name == "lo" {
+			continue
+		}
+
+		ip := ""
+		for i := 3; i < len(fields)-1; i++ {
+			if fields[i] == "inet" {
+				ip = fields[i+1]
+				if idx := strings.Index(ip, "/"); idx > 0 {
+					ip = ip[:idx]
+				}
+				break
+			}
+		}
+
+		mac := ""
+		macOut, _ := exec.Command("cat", "/sys/class/net/"+name+"/address").Output()
+		mac = strings.TrimSpace(string(macOut))
+
+		operstate := "down"
+		stateOut, _ := os.ReadFile("/sys/class/net/" + name + "/operstate")
+		if len(stateOut) > 0 {
+			operstate = strings.TrimSpace(string(stateOut))
+		}
+		status := "已连接"
+		if operstate != "up" {
+			status = "未连接"
+		}
+
+		netType := "以太网"
+		if strings.HasPrefix(name, "wlan") || strings.HasPrefix(name, "wlp") {
+			netType = "无线"
+		} else if strings.HasPrefix(name, "usb") {
+			netType = "USB"
+		} else if strings.HasPrefix(name, "eth") || strings.HasPrefix(name, "en") {
+			netType = "以太网"
+		}
+
+		speed := ""
+		speedOut, _ := os.ReadFile("/sys/class/net/" + name + "/speed")
+		if len(speedOut) > 0 {
+			s := strings.TrimSpace(string(speedOut))
+			if s != "" && s != "Unknown" {
+				speed = s + " Mbps"
+			}
+		}
+
+		rxBytes := int64(0)
+		txBytes := int64(0)
+		rxOut, _ := os.ReadFile("/sys/class/net/" + name + "/statistics/rx_bytes")
+		if len(rxOut) > 0 {
+			rxBytes, _ = strconv.ParseInt(strings.TrimSpace(string(rxOut)), 10, 64)
+		}
+		txOut, _ := os.ReadFile("/sys/class/net/" + name + "/statistics/tx_bytes")
+		if len(txOut) > 0 {
+			txBytes, _ = strconv.ParseInt(strings.TrimSpace(string(txOut)), 10, 64)
+		}
+
+		link := ""
+		if operstate == "up" {
+			link = "UP"
+		} else {
+			link = "DOWN"
+		}
+
+		interfaces = append(interfaces, NetInterface{
+			Name:    name,
+			Ip:      ip,
+			Mac:     mac,
+			Speed:   speed,
+			Status:  status,
+			Type:    netType,
+			RxBytes: rxBytes,
+			TxBytes: txBytes,
+			Link:    link,
+		})
+	}
+
+	json.NewEncoder(w).Encode(NetworkInfo{Interfaces: interfaces})
 }
 
 func handleStorage(w http.ResponseWriter, r *http.Request) {
