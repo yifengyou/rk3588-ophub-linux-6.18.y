@@ -319,6 +319,41 @@
         .ver-card .ver-tag-sm { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
         .ver-card .ver-latest { background: #28a745; color: #fff; }
         .ver-card .ver-current { background: #2c5aa0; color: #fff; }
+
+        .backup-card { background: #fff; border-radius: 10px; padding: 30px; max-width: 800px; margin: 0 auto; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+        .backup-card h1 { font-size: 22px; color: #2c5aa0; margin-bottom: 5px; }
+        .backup-card .subtitle { color: #666; font-size: 14px; margin-bottom: 20px; }
+        .backup-disk-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px; }
+        .backup-disk-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border: 2px solid #e0e0e0; border-radius: 8px; cursor: pointer; transition: all .2s; user-select: none; }
+        .backup-disk-item:hover { border-color: #2c5aa0; background: #f8faff; }
+        .backup-disk-item.selected { border-color: #2c5aa0; background: #eef2fa; }
+        .backup-disk-icon { font-size: 24px; }
+        .backup-disk-info { flex: 1; }
+        .backup-disk-dev { font-weight: 600; font-size: 14px; color: #333; }
+        .backup-disk-detail { font-size: 12px; color: #888; margin-top: 2px; }
+        .backup-disk-type { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #e8f0fe; color: #2c5aa0; font-weight: 600; }
+        .backup-section { margin-bottom: 25px; }
+        .backup-section-title { font-size: 16px; font-weight: 600; color: #333; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #eee; }
+        .backup-actions { display: flex; gap: 10px; align-items: center; margin-top: 15px; }
+        .backup-btn { padding: 10px 22px; border: none; border-radius: 6px; font-size: 14px; font-weight: bold; cursor: pointer; transition: all .2s; }
+        .backup-btn:disabled { background: #ccc; cursor: not-allowed; color: #999; }
+        .backup-btn-backup { background: #28a745; color: #fff; }
+        .backup-btn-backup:hover:not(:disabled) { background: #218838; }
+        .backup-btn-backup.btn-cancel { background: #dc3545; animation: cancelPulse 2s infinite; }
+        .backup-btn-backup.btn-cancel:hover { background: #c82333; }
+        .backup-btn-restore { background: #2c5aa0; color: #fff; }
+        .backup-btn-restore:hover:not(:disabled) { background: #1f4080; }
+        .backup-btn-restore.btn-cancel { background: #dc3545; animation: cancelPulse 2s infinite; }
+        .backup-btn-restore.btn-cancel:hover { background: #c82333; }
+        .backup-status { font-size: 13px; padding: 8px 0; color: #666; min-height: 20px; }
+        .backup-progress-bar { width: 100%; height: 8px; background: #e9ecef; border-radius: 4px; overflow: hidden; margin-top: 8px; display: none; }
+        .backup-progress-bar.visible { display: block; }
+        .backup-progress-bar .bar-fill { height: 100%; background: linear-gradient(90deg, #28a745, #5cb85c); border-radius: 4px; transition: width .3s; width: 0%; }
+        .backup-restore-upload { padding: 20px; border: 2px dashed #ccc; border-radius: 8px; text-align: center; cursor: pointer; transition: all .2s; margin-bottom: 12px; }
+        .backup-restore-upload:hover { border-color: #2c5aa0; background: #f8faff; }
+        .backup-restore-upload-icon { font-size: 32px; margin-bottom: 6px; }
+        .backup-restore-upload-text { color: #666; font-size: 13px; }
+        .backup-restore-file-info { font-size: 13px; color: #2c5aa0; margin-bottom: 8px; }
     </style>
 </head>
 <body>
@@ -371,6 +406,7 @@
     <div class="nav-tab" data-panel="boot-panel" onclick="switchTab(this)">🔀 引导顺序</div>
     <div class="nav-tab" data-panel="storage-panel" onclick="switchTab(this)">💾 存储检测</div>
     <div class="nav-tab" data-panel="update-panel" onclick="switchTab(this)">📦 更新助手</div>
+    <div class="nav-tab" data-panel="backup-panel" onclick="switchTab(this)">💿 备份还原</div>
     <div class="nav-tab" data-panel="terminal-panel" onclick="switchTab(this)">💻 终端</div>
     <div class="nav-actions">
         <div class="nav-about" onclick="showAbout()">ℹ️ 关于</div>
@@ -540,6 +576,49 @@
         </div>
         <div id="storage-content">
             <div class="storage-loading">点击「刷新检测」获取存储设备信息</div>
+        </div>
+    </div>
+</div>
+
+<div id="backup-panel" class="panel">
+    <div class="backup-card">
+        <h1>备份还原</h1>
+        <p class="subtitle">全盘备份/还原磁盘镜像，使用 gzip 实时压缩，支持边下载边备份、边上传边还原。</p>
+
+        <div class="backup-section">
+            <div class="backup-section-title">💿 全盘备份</div>
+            <p style="font-size:13px;color:#666;margin-bottom:12px;">选择磁盘后点击备份，浏览器将下载 gzip 压缩的磁盘镜像。整个过程边读边压缩边下载，不占用设备内存。</p>
+            <div class="update-warning-box">⚠️ <strong>备份大磁盘可能耗时较长，请确保网络稳定。</strong>备份过程中请勿关闭浏览器或断开设备电源。</div>
+            <div class="backup-disk-list" id="backup-disk-list">
+                <div style="color:#888;font-size:13px;padding:8px;">点击「🔄 刷新磁盘列表」加载可用磁盘</div>
+            </div>
+            <div class="backup-actions">
+                <button type="button" class="backup-btn" style="background:#6c757d;color:#fff;" onclick="loadBackupDisks()">🔄 刷新磁盘列表</button>
+                <button type="button" class="backup-btn backup-btn-backup" id="btn-backup" onclick="startBackup()" disabled>⬇️ 备份磁盘</button>
+            </div>
+            <div class="backup-status" id="backup-status"></div>
+            <div class="backup-progress-bar" id="backup-progress-bar"><div class="bar-fill" id="backup-bar-fill"></div></div>
+        </div>
+
+        <div class="backup-section">
+            <div class="backup-section-title">📤 全盘还原</div>
+            <p style="font-size:13px;color:#666;margin-bottom:12px;">选择之前备份的 .img.gz 压缩镜像和目标磁盘，上传后边解压边写入。整个过程不占用设备内存。</p>
+            <div class="update-warning-box">⚠️ <strong>还原操作会覆盖目标磁盘上的所有数据！</strong>请仔细确认目标磁盘，误操作将导致数据永久丢失。</div>
+            <div class="backup-restore-upload" id="restore-upload-area" onclick="document.getElementById('restore-file-input').click()">
+                <div class="backup-restore-upload-icon">📦</div>
+                <div class="backup-restore-upload-text">点击选择 .img.gz 备份文件</div>
+                <input type="file" id="restore-file-input" accept=".gz,.img.gz" style="display:none" onchange="onRestoreFileSelected(this)">
+            </div>
+            <div class="backup-restore-file-info" id="restore-file-info"></div>
+            <div class="backup-disk-list" id="restore-disk-list">
+                <div style="color:#888;font-size:13px;padding:8px;">点击「🔄 刷新磁盘列表」加载可用磁盘</div>
+            </div>
+            <div class="backup-actions">
+                <button type="button" class="backup-btn" style="background:#6c757d;color:#fff;" onclick="loadRestoreDisks()">🔄 刷新磁盘列表</button>
+                <button type="button" class="backup-btn backup-btn-restore" id="btn-restore" onclick="startRestore()" disabled>⬆️ 还原磁盘</button>
+            </div>
+            <div class="backup-status" id="restore-status"></div>
+            <div class="backup-progress-bar" id="restore-progress-bar"><div class="bar-fill" id="restore-bar-fill" style="background:linear-gradient(90deg,#2c5aa0,#5b8fd6);"></div></div>
         </div>
     </div>
 </div>
@@ -1110,6 +1189,263 @@
     // ==================== About ====================
     function showAbout() { document.getElementById('about-overlay').classList.add('visible'); }
     function hideAbout() { document.getElementById('about-overlay').classList.remove('visible'); }
+
+    // ==================== Backup & Restore ====================
+    let backupSelectedDisk = '';
+    let restoreSelectedDisk = '';
+    let restoreSelectedFile = null;
+    let backupRunning = false;
+    let restoreRunning = false;
+    let backupAbortCtrl = null;
+    let restoreAbortCtrl = null;
+
+    function loadBackupDisks() {
+        fetch('/api/backup/disks').then(r => r.json()).then(data => {
+            var list = document.getElementById('backup-disk-list');
+            if (!data.disks || !data.disks.length) {
+                list.innerHTML = '<div style="color:#888;font-size:13px;padding:8px;">未检测到可用磁盘</div>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < data.disks.length; i++) {
+                var d = data.disks[i];
+                html += '<div class="backup-disk-item" data-dev="' + d.device + '" onclick="selectBackupDisk(this)">';
+                html += '<div class="backup-disk-icon">💾</div>';
+                html += '<div class="backup-disk-info">';
+                html += '<div class="backup-disk-dev">' + d.device + '</div>';
+                html += '<div class="backup-disk-detail">' + (d.model || '未知') + '  |  ' + fmtBytes(d.size) + '</div>';
+                html += '</div>';
+                html += '<span class="backup-disk-type">' + d.type + '</span>';
+                html += '</div>';
+            }
+            list.innerHTML = html;
+        }).catch(e => {
+            document.getElementById('backup-disk-list').innerHTML = '<div style="color:#d9534f;font-size:13px;padding:8px;">加载失败: ' + e.message + '</div>';
+        });
+    }
+
+    function loadRestoreDisks() {
+        fetch('/api/backup/disks').then(r => r.json()).then(data => {
+            var list = document.getElementById('restore-disk-list');
+            if (!data.disks || !data.disks.length) {
+                list.innerHTML = '<div style="color:#888;font-size:13px;padding:8px;">未检测到可用磁盘</div>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < data.disks.length; i++) {
+                var d = data.disks[i];
+                html += '<div class="backup-disk-item" data-dev="' + d.device + '" onclick="selectRestoreDisk(this)">';
+                html += '<div class="backup-disk-icon">💾</div>';
+                html += '<div class="backup-disk-info">';
+                html += '<div class="backup-disk-dev">' + d.device + '</div>';
+                html += '<div class="backup-disk-detail">' + (d.model || '未知') + '  |  ' + fmtBytes(d.size) + '</div>';
+                html += '</div>';
+                html += '<span class="backup-disk-type">' + d.type + '</span>';
+                html += '</div>';
+            }
+            list.innerHTML = html;
+            checkRestoreReady();
+        }).catch(e => {
+            document.getElementById('restore-disk-list').innerHTML = '<div style="color:#d9534f;font-size:13px;padding:8px;">加载失败: ' + e.message + '</div>';
+        });
+    }
+
+    function selectBackupDisk(el) {
+        document.querySelectorAll('#backup-disk-list .backup-disk-item').forEach(c => c.classList.remove('selected'));
+        el.classList.add('selected');
+        backupSelectedDisk = el.dataset.dev;
+        if (!backupRunning) {
+            document.getElementById('btn-backup').disabled = false;
+        }
+    }
+
+    function selectRestoreDisk(el) {
+        document.querySelectorAll('#restore-disk-list .backup-disk-item').forEach(c => c.classList.remove('selected'));
+        el.classList.add('selected');
+        restoreSelectedDisk = el.dataset.dev;
+        checkRestoreReady();
+    }
+
+    function onRestoreFileSelected(input) {
+        if (input.files && input.files[0]) {
+            restoreSelectedFile = input.files[0];
+            document.getElementById('restore-file-info').textContent = '已选择: ' + restoreSelectedFile.name + ' (' + fmtBytes(restoreSelectedFile.size) + ')';
+            checkRestoreReady();
+        }
+    }
+
+    function checkRestoreReady() {
+        var btn = document.getElementById('btn-restore');
+        if (restoreSelectedDisk && restoreSelectedFile && !restoreRunning) {
+            btn.disabled = false;
+        } else {
+            btn.disabled = true;
+        }
+    }
+
+    function startBackup() {
+        if (backupRunning) {
+            cancelBackup();
+            return;
+        }
+        if (!backupSelectedDisk) return;
+        var btn = document.getElementById('btn-backup');
+        backupRunning = true;
+        btn.textContent = '🚫 取消备份';
+        btn.classList.add('btn-cancel');
+        document.getElementById('backup-progress-bar').classList.add('visible');
+        document.getElementById('backup-bar-fill').style.width = '0%';
+        showBackupStatus('⏳ 正在开始备份...', 'info');
+
+        var evtSource = new EventSource('/api/backup/progress');
+        evtSource.addEventListener('progress', function(e) {
+            var data = JSON.parse(e.data);
+            handleBackupProgress(data);
+            if (data.done || data.error) {
+                evtSource.close();
+                backupRunning = false;
+                btn.textContent = '⬇️ 备份磁盘';
+                btn.classList.remove('btn-cancel');
+                btn.disabled = !backupSelectedDisk;
+            }
+        });
+
+        var link = document.createElement('a');
+        link.href = '/api/backup/stream?disk=' + encodeURIComponent(backupSelectedDisk);
+        link.download = backupSelectedDisk.replace('/dev/', '') + '.img.gz';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    function cancelBackup() {
+        fetch('/api/backup/cancel', { method: 'POST' }).then(() => {
+            backupRunning = false;
+            var btn = document.getElementById('btn-backup');
+            btn.textContent = '⬇️ 备份磁盘';
+            btn.classList.remove('btn-cancel');
+            btn.disabled = !backupSelectedDisk;
+            document.getElementById('backup-progress-bar').classList.remove('visible');
+            showBackupStatus('🚫 备份已取消', 'warning');
+        });
+    }
+
+    function handleBackupProgress(data) {
+        if (data.error) {
+            showBackupStatus('❌ ' + data.error, 'error');
+            document.getElementById('backup-progress-bar').classList.remove('visible');
+            return;
+        }
+        var pct = data.percent || 0;
+        document.getElementById('backup-bar-fill').style.width = pct.toFixed(1) + '%';
+        var readText = fmtBytes(data.read || 0);
+        var totalText = data.total > 0 ? fmtBytes(data.total) : '未知';
+        var speedText = fmtSpeed(data.speed || 0);
+        var etaText = fmtEta(data.eta || 0);
+        if (data.done) {
+            showBackupStatus('✅ 备份完成: ' + readText + ' / ' + totalText, 'success');
+        } else {
+            showBackupStatus('⏳ 备份中: ' + readText + ' / ' + totalText + '  |  速度: ' + speedText + '  |  剩余: ' + etaText + '  |  ' + pct.toFixed(1) + '%', 'info');
+        }
+    }
+
+    function showBackupStatus(msg, type) {
+        var el = document.getElementById('backup-status');
+        el.textContent = msg;
+        el.style.color = type === 'success' ? '#28a745' : type === 'error' ? '#dc3545' : type === 'warning' ? '#8d6e00' : '#666';
+    }
+
+    function startRestore() {
+        if (restoreRunning) {
+            cancelRestore();
+            return;
+        }
+        if (!restoreSelectedDisk || !restoreSelectedFile) return;
+        var btn = document.getElementById('btn-restore');
+        restoreRunning = true;
+        btn.textContent = '🚫 取消还原';
+        btn.classList.add('btn-cancel');
+        btn.disabled = false;
+        document.getElementById('restore-progress-bar').classList.add('visible');
+        document.getElementById('restore-bar-fill').style.width = '0%';
+        showRestoreStatus('⏳ 正在上传并还原...', 'info');
+
+        restoreAbortCtrl = new AbortController();
+
+        var evtSource = new EventSource('/api/backup/progress');
+        evtSource.addEventListener('progress', function(e) {
+            var data = JSON.parse(e.data);
+            handleRestoreProgress(data);
+            if (data.done || data.error) {
+                evtSource.close();
+                restoreRunning = false;
+                btn.textContent = '⬆️ 还原磁盘';
+                btn.classList.remove('btn-cancel');
+                btn.disabled = !(restoreSelectedDisk && restoreSelectedFile);
+            }
+        });
+
+        fetch('/api/restore/stream?disk=' + encodeURIComponent(restoreSelectedDisk), {
+            method: 'POST',
+            body: restoreSelectedFile,
+            signal: restoreAbortCtrl.signal
+        }).then(resp => {
+            if (!resp.ok) {
+                return resp.text().then(t => { throw new Error(t); });
+            }
+            return resp.json();
+        }).then(data => {
+            if (data.error) {
+                showRestoreStatus('❌ ' + data.error, 'error');
+            } else {
+                showRestoreStatus('✅ ' + data.message, 'success');
+                document.getElementById('restore-bar-fill').style.width = '100%';
+            }
+        }).catch(e => {
+            if (e.name === 'AbortError') return;
+            showRestoreStatus('❌ 上传失败: ' + e.message, 'error');
+        });
+    }
+
+    function cancelRestore() {
+        if (restoreAbortCtrl) {
+            restoreAbortCtrl.abort();
+            restoreAbortCtrl = null;
+        }
+        fetch('/api/backup/cancel', { method: 'POST' });
+        restoreRunning = false;
+        var btn = document.getElementById('btn-restore');
+        btn.textContent = '⬆️ 还原磁盘';
+        btn.classList.remove('btn-cancel');
+        btn.disabled = !(restoreSelectedDisk && restoreSelectedFile);
+        document.getElementById('restore-progress-bar').classList.remove('visible');
+        showRestoreStatus('🚫 还原已取消，设备可能无法使用', 'warning');
+    }
+
+    function handleRestoreProgress(data) {
+        if (data.error) {
+            showRestoreStatus('❌ ' + data.error, 'error');
+            document.getElementById('restore-progress-bar').classList.remove('visible');
+            return;
+        }
+        var pct = data.percent || 0;
+        document.getElementById('restore-bar-fill').style.width = pct.toFixed(1) + '%';
+        var writtenText = fmtBytes(data.read || 0);
+        var totalText = data.total > 0 ? fmtBytes(data.total) : '未知';
+        var speedText = fmtSpeed(data.speed || 0);
+        var etaText = fmtEta(data.eta || 0);
+        if (data.done) {
+            showRestoreStatus('✅ 还原完成: ' + writtenText + ' / ' + totalText, 'success');
+        } else {
+            showRestoreStatus('⏳ 还原中: ' + writtenText + ' / ' + totalText + '  |  速度: ' + speedText + '  |  剩余: ' + etaText + '  |  ' + pct.toFixed(1) + '%', 'info');
+        }
+    }
+
+    function showRestoreStatus(msg, type) {
+        var el = document.getElementById('restore-status');
+        el.textContent = msg;
+        el.style.color = type === 'success' ? '#28a745' : type === 'error' ? '#dc3545' : type === 'warning' ? '#8d6e00' : '#666';
+    }
 
     // ==================== Reboot ====================
     async function triggerReboot(e) {

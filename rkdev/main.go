@@ -473,6 +473,11 @@ func main() {
  	http.HandleFunc("/api/update_download", handleUpdateDownload)
 	http.HandleFunc("/api/update_cancel", handleUpdateCancel)
  	http.HandleFunc("/api/update_upload", handleUpdateUpload)
+	http.HandleFunc("/api/backup/disks", handleBackupDisks)
+	http.HandleFunc("/api/backup/stream", handleBackupStream)
+	http.HandleFunc("/api/backup/progress", handleBackupProgress)
+	http.HandleFunc("/api/backup/cancel", handleBackupCancel)
+	http.HandleFunc("/api/restore/stream", handleRestoreStream)
 
 	http.Handle("/api/terminal", websocket.Handler(handleTerminal))
 	http.Handle("/res/", http.StripPrefix("/res/", http.FileServer(http.FS(resSubFS))))
@@ -3471,6 +3476,502 @@ func handleUpdateUpload(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"message": "文件已上传，正在后台写入 SPI Flash，请勿关闭设备电源",
+	})
+}
+
+type BackupProgress struct {
+	mu       sync.Mutex
+	Phase    string  `json:"phase"`
+	Percent  float64 `json:"percent"`
+	Read     int64   `json:"read"`
+	Total    int64   `json:"total"`
+	Speed    float64 `json:"speed"`
+	Eta      float64 `json:"eta"`
+	Done     bool    `json:"done"`
+	Error    string  `json:"error"`
+	Success  bool    `json:"success"`
+	Running  bool    `json:"running"`
+	cancelCh chan struct{}
+}
+
+var backupProgress BackupProgress
+
+type BackupDisk struct {
+	Device string `json:"device"`
+	Model  string `json:"model"`
+	Size   int64  `json:"size"`
+	Type   string `json:"type"`
+}
+
+func handleBackupDisks(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	out, err := exec.Command("lsblk", "-b", "-d", "-n", "-o", "NAME,SIZE,MODEL,ROTA,TRAN").Output()
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "lsblk 执行失败: " + err.Error()})
+		return
+	}
+
+	var disks []BackupDisk
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		name := fields[0]
+		if strings.HasPrefix(name, "sr") || strings.HasPrefix(name, "loop") || strings.HasPrefix(name, "zram") {
+			continue
+		}
+
+		sizeBytes, _ := strconv.ParseInt(fields[1], 10, 64)
+		rota := fields[2]
+		transport := ""
+		if len(fields) >= 5 {
+			transport = fields[4]
+		}
+		model := ""
+		if len(fields) >= 4 {
+			if len(fields) >= 5 {
+				model = strings.Join(fields[3:], " ")
+			} else {
+				model = strings.Join(fields[3:], " ")
+			}
+		}
+
+		devType := "HDD"
+		if rota == "0" {
+			devType = "SSD"
+		}
+		if transport == "usb" {
+			devType = "USB"
+		}
+		if transport == "mmc" {
+			devType = "eMMC"
+		}
+		if strings.HasPrefix(name, "mtd") || strings.HasPrefix(name, "mmcblk") {
+			devType = "eMMC"
+		}
+		if strings.HasPrefix(name, "nvme") {
+			devType = "NVMe"
+		}
+
+		disks = append(disks, BackupDisk{
+			Device: "/dev/" + name,
+			Model:  model,
+			Size:   sizeBytes,
+			Type:   devType,
+		})
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{"disks": disks})
+}
+
+func handleBackupStream(w http.ResponseWriter, r *http.Request) {
+	disk := r.URL.Query().Get("disk")
+	if disk == "" {
+		http.Error(w, "缺少 disk 参数", http.StatusBadRequest)
+		return
+	}
+	if !strings.HasPrefix(disk, "/dev/") {
+		http.Error(w, "非法设备路径", http.StatusBadRequest)
+		return
+	}
+
+	backupProgress.mu.Lock()
+	if backupProgress.Running {
+		backupProgress.mu.Unlock()
+		http.Error(w, "已有备份任务在执行", http.StatusConflict)
+		return
+	}
+	backupProgress.Running = true
+	backupProgress.Done = false
+	backupProgress.Error = ""
+	backupProgress.Phase = "reading"
+	backupProgress.Percent = 0
+	backupProgress.Read = 0
+	backupProgress.Total = 0
+	backupProgress.Speed = 0
+	backupProgress.Eta = 0
+	backupProgress.cancelCh = make(chan struct{})
+	backupProgress.mu.Unlock()
+
+	devFile, err := os.Open(disk)
+	if err != nil {
+		backupProgress.mu.Lock()
+		backupProgress.Error = "打开设备失败: " + err.Error()
+		backupProgress.Running = false
+		backupProgress.mu.Unlock()
+		http.Error(w, "打开设备失败: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer devFile.Close()
+
+	fi, err := devFile.Stat()
+	var totalSize int64
+	if err == nil && fi.Size() > 0 {
+		totalSize = fi.Size()
+	} else {
+		out, err2 := exec.Command("blockdev", "--getsize64", disk).Output()
+		if err2 == nil {
+			totalSize, _ = strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+		}
+	}
+
+	backupProgress.mu.Lock()
+	backupProgress.Total = totalSize
+	backupProgress.mu.Unlock()
+
+	fileName := filepath.Base(disk) + ".img.gz"
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+fileName+"\"")
+	w.Header().Set("Transfer-Encoding", "chunked")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+
+	advLog("info", "开始备份磁盘: %s (大小: %s)", disk, formatBytes(totalSize))
+
+	flusher, canFlush := w.(http.Flusher)
+
+	gw, err := gzip.NewWriterLevel(w, gzip.BestSpeed)
+	if err != nil {
+		gw = gzip.NewWriter(w)
+	}
+
+	buf := make([]byte, 256*1024)
+	var totalRead int64
+	startTime := time.Now()
+	lastReport := startTime
+
+	for {
+		select {
+		case <-backupProgress.cancelCh:
+			gw.Close()
+			devFile.Close()
+			backupProgress.mu.Lock()
+			backupProgress.Error = "备份已取消"
+			backupProgress.Running = false
+			backupProgress.mu.Unlock()
+			advLog("info", "备份已取消: %s", disk)
+			return
+		default:
+		}
+
+		n, readErr := devFile.Read(buf)
+		if n > 0 {
+			_, werr := gw.Write(buf[:n])
+			if werr != nil {
+				gw.Close()
+				backupProgress.mu.Lock()
+				backupProgress.Error = "写入流失败（客户端可能已断开）: " + werr.Error()
+				backupProgress.Running = false
+				backupProgress.mu.Unlock()
+				advLog("error", "备份写入流失败: %v", werr)
+				return
+			}
+			totalRead += int64(n)
+			now := time.Now()
+			if now.Sub(lastReport) >= 500*time.Millisecond || (readErr != nil && totalRead > 0) {
+				elapsed := now.Sub(startTime).Seconds()
+				speed := float64(0)
+				if elapsed > 0 {
+					speed = float64(totalRead) / elapsed
+				}
+				percent := float64(0)
+				if totalSize > 0 {
+					percent = float64(totalRead) / float64(totalSize) * 100
+				}
+				eta := float64(0)
+				if speed > 0 && totalSize > 0 {
+					eta = float64(totalSize-totalRead) / speed
+				}
+				backupProgress.mu.Lock()
+				backupProgress.Phase = "reading"
+				backupProgress.Percent = percent
+				backupProgress.Read = totalRead
+				backupProgress.Speed = speed
+				backupProgress.Eta = eta
+				backupProgress.mu.Unlock()
+				lastReport = now
+			}
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			gw.Close()
+			backupProgress.mu.Lock()
+			backupProgress.Error = "读取设备失败: " + readErr.Error()
+			backupProgress.Running = false
+			backupProgress.mu.Unlock()
+			return
+		}
+	}
+
+	if totalSize > 0 && totalRead < totalSize {
+		remaining := totalSize - totalRead
+		advLog("info", "设备提前返回 EOF，已读 %s，剩余 %s 用零填充", formatBytes(totalRead), formatBytes(remaining))
+		zeroBuf := make([]byte, 256*1024)
+		for remaining > 0 {
+			select {
+			case <-backupProgress.cancelCh:
+				gw.Close()
+				devFile.Close()
+				backupProgress.mu.Lock()
+				backupProgress.Error = "备份已取消"
+				backupProgress.Running = false
+				backupProgress.mu.Unlock()
+				return
+			default:
+			}
+			chunk := int64(len(zeroBuf))
+			if chunk > remaining {
+				chunk = remaining
+			}
+			_, werr := gw.Write(zeroBuf[:chunk])
+			if werr != nil {
+				gw.Close()
+				backupProgress.mu.Lock()
+				backupProgress.Error = "写入流失败: " + werr.Error()
+				backupProgress.Running = false
+				backupProgress.mu.Unlock()
+				return
+			}
+			totalRead += chunk
+			remaining -= chunk
+			now := time.Now()
+			if now.Sub(lastReport) >= 500*time.Millisecond {
+				elapsed := now.Sub(startTime).Seconds()
+				speed := float64(0)
+				if elapsed > 0 {
+					speed = float64(totalRead) / elapsed
+				}
+				percent := float64(totalRead) / float64(totalSize) * 100
+				backupProgress.mu.Lock()
+				backupProgress.Percent = percent
+				backupProgress.Read = totalRead
+				backupProgress.Speed = speed
+				backupProgress.Eta = float64(totalSize-totalRead) / speed
+				backupProgress.mu.Unlock()
+				lastReport = now
+			}
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+	}
+
+	gw.Close()
+	if canFlush {
+		flusher.Flush()
+	}
+
+	backupProgress.mu.Lock()
+	backupProgress.Done = true
+	backupProgress.Running = false
+	backupProgress.Percent = 100
+	backupProgress.Read = totalRead
+	backupProgress.mu.Unlock()
+
+	advLog("info", "备份完成: %s (%s)", disk, formatBytes(totalRead))
+}
+
+func handleBackupProgress(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, _ := w.(http.Flusher)
+	for {
+		backupProgress.mu.Lock()
+		data := map[string]interface{}{
+			"phase":   backupProgress.Phase,
+			"percent": backupProgress.Percent,
+			"read":    backupProgress.Read,
+			"total":   backupProgress.Total,
+			"speed":   backupProgress.Speed,
+			"eta":     backupProgress.Eta,
+			"running": backupProgress.Running,
+			"done":    backupProgress.Done,
+			"success": backupProgress.Success,
+			"error":   backupProgress.Error,
+		}
+		done := backupProgress.Done || backupProgress.Error != ""
+		running := backupProgress.Running
+		backupProgress.mu.Unlock()
+
+		jsonData, _ := json.Marshal(data)
+		fmt.Fprintf(w, "event: progress\ndata: %s\n\n", jsonData)
+		flusher.Flush()
+
+		if done || !running {
+			break
+		}
+
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+func handleBackupCancel(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	backupProgress.mu.Lock()
+	if backupProgress.Running && backupProgress.cancelCh != nil {
+		close(backupProgress.cancelCh)
+		backupProgress.cancelCh = nil
+	}
+	backupProgress.mu.Unlock()
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+func handleRestoreStream(w http.ResponseWriter, r *http.Request) {
+	disk := r.URL.Query().Get("disk")
+	if disk == "" {
+		http.Error(w, "缺少 disk 参数", http.StatusBadRequest)
+		return
+	}
+	if !strings.HasPrefix(disk, "/dev/") {
+		http.Error(w, "非法设备路径", http.StatusBadRequest)
+		return
+	}
+
+	backupProgress.mu.Lock()
+	if backupProgress.Running {
+		backupProgress.mu.Unlock()
+		http.Error(w, "已有任务在执行", http.StatusConflict)
+		return
+	}
+	backupProgress.Running = true
+	backupProgress.Done = false
+	backupProgress.Error = ""
+	backupProgress.Phase = "restoring"
+	backupProgress.Percent = 0
+	backupProgress.Read = 0
+	backupProgress.Total = 0
+	backupProgress.Speed = 0
+	backupProgress.Eta = 0
+	backupProgress.cancelCh = make(chan struct{})
+	backupProgress.mu.Unlock()
+
+	defer func() {
+		r.Body.Close()
+		backupProgress.mu.Lock()
+		backupProgress.Running = false
+		backupProgress.mu.Unlock()
+	}()
+
+	contentLen := r.ContentLength
+	backupProgress.mu.Lock()
+	backupProgress.Total = contentLen
+	backupProgress.mu.Unlock()
+
+	gr, err := gzip.NewReader(r.Body)
+	if err != nil {
+		backupProgress.mu.Lock()
+		backupProgress.Error = "解压失败: " + err.Error()
+		backupProgress.mu.Unlock()
+		http.Error(w, "解压失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer gr.Close()
+
+	devFile, err := os.OpenFile(disk, os.O_WRONLY|os.O_SYNC, 0)
+	if err != nil {
+		backupProgress.mu.Lock()
+		backupProgress.Error = "打开设备失败: " + err.Error()
+		backupProgress.mu.Unlock()
+		http.Error(w, "打开设备失败: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer devFile.Close()
+
+	advLog("info", "开始还原磁盘: %s", disk)
+
+	buf := make([]byte, 256*1024)
+	var totalWritten int64
+	startTime := time.Now()
+	lastReport := startTime
+
+	for {
+		select {
+		case <-backupProgress.cancelCh:
+			devFile.Close()
+			gr.Close()
+			backupProgress.mu.Lock()
+			backupProgress.Error = "还原已取消，设备可能无法使用"
+			backupProgress.Running = false
+			backupProgress.mu.Unlock()
+			advLog("warning", "还原已取消: %s", disk)
+			return
+		default:
+		}
+
+		n, readErr := gr.Read(buf)
+		if n > 0 {
+			wn, werr := devFile.Write(buf[:n])
+			totalWritten += int64(wn)
+			now := time.Now()
+			if now.Sub(lastReport) >= 500*time.Millisecond || (readErr != nil && totalWritten > 0) {
+				elapsed := now.Sub(startTime).Seconds()
+				speed := float64(0)
+				if elapsed > 0 {
+					speed = float64(totalWritten) / elapsed
+				}
+				percent := float64(0)
+				if contentLen > 0 {
+					percent = float64(totalWritten) / float64(contentLen) * 100
+				}
+				eta := float64(0)
+				if speed > 0 && contentLen > 0 {
+					remaining := contentLen - totalWritten
+					if remaining > 0 {
+						eta = float64(remaining) / speed
+					}
+				}
+				backupProgress.mu.Lock()
+				backupProgress.Phase = "restoring"
+				backupProgress.Percent = percent
+				backupProgress.Read = totalWritten
+				backupProgress.Speed = speed
+				backupProgress.Eta = eta
+				backupProgress.mu.Unlock()
+				lastReport = now
+			}
+			if werr != nil {
+				backupProgress.mu.Lock()
+				backupProgress.Error = "写入设备失败: " + werr.Error()
+				backupProgress.mu.Unlock()
+				advLog("error", "还原写入失败: %v", werr)
+				return
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			backupProgress.mu.Lock()
+			backupProgress.Error = "读取上传数据失败: " + readErr.Error()
+			backupProgress.mu.Unlock()
+			return
+		}
+	}
+
+	devFile.Close()
+
+	backupProgress.mu.Lock()
+	backupProgress.Done = true
+	backupProgress.Success = true
+	backupProgress.Percent = 100
+	backupProgress.Read = totalWritten
+	backupProgress.mu.Unlock()
+
+	advLog("info", "还原完成: %s (%s)", disk, formatBytes(totalWritten))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "还原完成，重启设备后生效",
 	})
 }
 
