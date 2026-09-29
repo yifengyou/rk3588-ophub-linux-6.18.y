@@ -57,16 +57,41 @@
         .status-done { background: #d4edda; color: #155724; }
         .status-error { background: #f8d7da; color: #721c24; }
 
-        #terminal-container { width: 100%; height: 75vh; background: #1e1e1e; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,.15); padding: 4px; cursor: text; }
+        .term-wrapper { background: #000; padding: 5px 5px 5px 5px; }
+        #terminal-container { width: 100%; height: 72vh; background: #0d1117; overflow: hidden; cursor: text; position: relative; }
+        #terminal-container .xterm { position: relative !important; width: 100% !important; height: 100% !important; }
+        #terminal-container .xterm-viewport { overflow-y: auto !important; }
+        #terminal-container .xterm-viewport::-webkit-scrollbar { width: 10px; }
+        #terminal-container .xterm-viewport::-webkit-scrollbar-track { background: rgba(0,0,0,.15); border-radius: 5px; }
+        #terminal-container .xterm-viewport::-webkit-scrollbar-thumb { background: rgba(255,255,255,.25); border-radius: 5px; border: 2px solid rgba(0,0,0,.15); }
+        #terminal-container .xterm-viewport::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.4); }
+        #terminal-container .xterm-viewport { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.25) rgba(0,0,0,.15); }
 
-        /* ===== Terminal Reset Button ===== */
-        .terminal-toolbar { display: flex; justify-content: flex-end; margin-bottom: 6px; }
-        .btn-term-reset {
-            padding: 5px 14px; font-size: 13px; font-weight: bold;
-            color: #d9534f; border: 1px solid #d9534f; border-radius: 4px;
-            background: transparent; cursor: pointer; transition: all .2s; user-select: none;
+        /* ===== Terminal Toolbar ===== */
+        .terminal-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0; background: #f8faff; padding: 10px 16px; border-radius: 8px 8px 0 0; border: 1px solid #d4dfee; border-bottom: none; }
+        .term-title { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #2c5aa0; }
+        .term-title .term-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ada6a; box-shadow: 0 0 6px rgba(74,218,106,.5); }
+        .term-title .term-dot.offline { background: #ccc; box-shadow: none; }
+        .term-actions { display: flex; gap: 6px; align-items: center; }
+        .btn-term {
+            padding: 5px 14px; font-size: 12px; font-weight: 600;
+            border-radius: 4px; cursor: pointer; transition: all .2s; user-select: none;
+            background: #fff; color: #5c7ebf; border: 1px solid #d4dfee;
         }
-        .btn-term-reset:hover { background: #d9534f; color: #fff; }
+        .btn-term:hover { background: #eef2fa; color: #2c5aa0; border-color: #2c5aa0; }
+        .btn-term-reset { color: #d9534f; border-color: #e8c5c5; }
+        .btn-term-reset:hover { background: #d9534f; color: #fff; border-color: #d9534f; }
+
+        /* ===== Terminal Settings Selectors ===== */
+        .term-select { padding: 4px 10px; font-size: 12px; font-weight: 600; border-radius: 4px; cursor: pointer; transition: all .2s; user-select: none; background: #fff; color: #5c7ebf; border: 1px solid #d4dfee; outline: none; }
+        .term-select:hover { background: #eef2fa; border-color: #2c5aa0; }
+        .term-select option { background: #fff; color: #333; }
+        .term-select-label { font-size: 11px; color: #8899bb; margin-right: 2px; user-select: none; }
+
+        /* ===== Terminal Warning ===== */
+        .term-warning { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 10px 16px; background: #fff8e1; border: 1px solid #ffe082; border-radius: 8px; font-size: 13px; color: #8d6e00; }
+        .term-warning-icon { font-size: 15px; }
+        .term-warning strong { color: #d84315; }
 
         .adv-toggle { text-align: right; margin-top: 10px; }
         .adv-toggle label { font-size: 14px; color: #555; cursor: pointer; user-select: none; }
@@ -252,9 +277,53 @@
 
 <div id="terminal-panel" class="panel">
     <div class="terminal-toolbar">
-        <button type="button" class="btn-term-reset" onclick="resetTerminal()">	✨ 复位终端</button>
+        <div class="term-title">
+            <span class="term-dot" id="term-status-dot"></span>
+            <span>Remote Shell</span>
+        </div>
+        <div class="term-actions">
+            <span class="term-select-label">字号</span>
+            <select class="term-select" id="term-fontsize" onchange="changeTermFontSize(this.value)">
+                <option value="9">9</option>
+                <option value="10">10</option>
+                <option value="11">11</option>
+                <option value="12">12</option>
+                <option value="13">13</option>
+                <option value="14" selected>14</option>
+                <option value="15">15</option>
+                <option value="16">16</option>
+                <option value="17">17</option>
+                <option value="18">18</option>
+                <option value="19">19</option>
+                <option value="20">20</option>
+                <option value="22">22</option>
+                <option value="24">24</option>
+                <option value="26">26</option>
+                <option value="28">28</option>
+                <option value="30">30</option>
+            </select>
+            <span class="term-select-label">主题</span>
+            <select class="term-select" id="term-theme" onchange="changeTermTheme(this.value)">
+                <option value="github_dark" selected>GitHub Dark</option>
+                <option value="tokyo_night">Tokyo Night</option>
+                <option value="dracula">Dracula</option>
+                <option value="monokai">Monokai</option>
+                <option value="github_dark">GitHub Dark</option>
+                <option value="github_light">GitHub Light</option>
+                <option value="solarized_dark">Solarized Dark</option>
+                <option value="solarized_light">Solarized Light</option>
+            </select>
+            <button type="button" class="btn-term" onclick="exportTermLog()">📥 导出日志</button>
+            <button type="button" class="btn-term btn-term-reset" onclick="resetTerminal()">✨ 复位</button>
+        </div>
     </div>
-    <div id="terminal-container"></div>
+    <div class="term-wrapper">
+        <div id="terminal-container"></div>
+    </div>
+    <div class="term-warning">
+        <span class="term-warning-icon">⚠️</span>
+        <span>终端直接操作设备系统，误操作可能导致<strong>数据丢失</strong>或<strong>系统崩溃</strong>，请谨慎执行每条命令。</span>
+    </div>
 </div>
 
 <div id="boot-panel" class="panel">
@@ -302,6 +371,8 @@
         <a href="https://github.com/yifengyou" target="_blank">github/yifengyou</a>
         <span class="dot"></span>
         <span>Built with <span class="heart">&#9829;</span></span>
+        <span class="dot"></span>
+        <span class="ver-tag">v{{.BuildTime}}</span>
     </div>
 </div>
 
@@ -334,6 +405,98 @@
         }
     }
 
+    // ==================== Terminal Themes ====================
+    const termThemes = {
+        one_dark: {
+            background: '#282c34', foreground: '#abb2bf', cursor: '#abb2bf', cursorAccent: '#282c34', selectionBackground: '#3d4351',
+            black: '#282c34', red: '#e06c75', green: '#98c379', yellow: '#e5c07b', blue: '#61afef', magenta: '#c678dd', cyan: '#56b6c2', white: '#abb2bf',
+            brightBlack: '#5c6370', brightRed: '#e06c75', brightGreen: '#98c379', brightYellow: '#e5c07b', brightBlue: '#61afef', brightMagenta: '#c678dd', brightCyan: '#56b6c2', brightWhite: '#ffffff'
+        },
+        tokyo_night: {
+            background: '#1a1b26', foreground: '#a9b1d6', cursor: '#c0caf5', cursorAccent: '#1a1b26', selectionBackground: '#33467c',
+            black: '#32344a', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68', blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#c0caf5',
+            brightBlack: '#565f89', brightRed: '#f7768e', brightGreen: '#9ece6a', brightYellow: '#e0af68', brightBlue: '#7aa2f7', brightMagenta: '#bb9af7', brightCyan: '#7dcfff', brightWhite: '#ffffff'
+        },
+        dracula: {
+            background: '#282a36', foreground: '#f8f8f2', cursor: '#f8f8f2', cursorAccent: '#282a36', selectionBackground: '#44475a',
+            black: '#000000', red: '#ff5555', green: '#50fa7b', yellow: '#f1fa8c', blue: '#bd93f9', magenta: '#ff79c6', cyan: '#8be9fd', white: '#f8f8f2',
+            brightBlack: '#6272a4', brightRed: '#ff6e6e', brightGreen: '#69ff94', brightYellow: '#ffffa5', brightBlue: '#d6acff', brightMagenta: '#ff92df', brightCyan: '#a4ffff', brightWhite: '#ffffff'
+        },
+        monokai: {
+            background: '#272822', foreground: '#f8f8f2', cursor: '#f8f8f0', cursorAccent: '#272822', selectionBackground: '#49483e',
+            black: '#272822', red: '#f92672', green: '#a6e22e', yellow: '#f4bf75', blue: '#66d9ef', magenta: '#ae81ff', cyan: '#a1efe4', white: '#f8f8f2',
+            brightBlack: '#75715e', brightRed: '#f92672', brightGreen: '#a6e22e', brightYellow: '#f4bf75', brightBlue: '#66d9ef', brightMagenta: '#ae81ff', brightCyan: '#a1efe4', brightWhite: '#f9f8f5'
+        },
+        github_dark: {
+            background: '#0d1117', foreground: '#c9d1d9', cursor: '#c9d1d9', cursorAccent: '#0d1117', selectionBackground: '#264f78',
+            black: '#484f58', red: '#ff7b72', green: '#7ee787', yellow: '#f2cc60', blue: '#79c0ff', magenta: '#d2a8ff', cyan: '#56d4dd', white: '#c9d1d9',
+            brightBlack: '#6e7681', brightRed: '#ffa198', brightGreen: '#56d364', brightYellow: '#e3b341', brightBlue: '#a5d6ff', brightMagenta: '#bc8cff', brightCyan: '#79c0ff', brightWhite: '#f0f6fc'
+        },
+        solarized_dark: {
+            background: '#002b36', foreground: '#839496', cursor: '#839496', cursorAccent: '#002b36', selectionBackground: '#073642',
+            black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900', blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
+            brightBlack: '#586e75', brightRed: '#cb4b16', brightGreen: '#586e75', brightYellow: '#657b83', brightBlue: '#839496', brightMagenta: '#6c71c4', brightCyan: '#93a1a1', brightWhite: '#fdf6e3'
+        },
+        github_light: {
+            background: '#ffffff', foreground: '#24292f', cursor: '#24292f', cursorAccent: '#ffffff', selectionBackground: '#dbeafe',
+            black: '#24292f', red: '#cf222e', green: '#116329', yellow: '#4d2d00', blue: '#0969da', magenta: '#8250df', cyan: '#1b7c83', white: '#6e7781',
+            brightBlack: '#57606a', brightRed: '#a40e26', brightGreen: '#1a7f37', brightYellow: '#633c01', brightBlue: '#218bff', brightMagenta: '#a475f9', brightCyan: '#3192aa', brightWhite: '#8c959f'
+        },
+        solarized_light: {
+            background: '#fdf6e3', foreground: '#657b83', cursor: '#657b83', cursorAccent: '#fdf6e3', selectionBackground: '#eee8d5',
+            black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900', blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
+            brightBlack: '#586e75', brightRed: '#cb4b16', brightGreen: '#586e75', brightYellow: '#657b83', brightBlue: '#839496', brightMagenta: '#6c71c4', brightCyan: '#93a1a1', brightWhite: '#fdf6e3'
+        }
+    };
+
+    function changeTermFontSize(size) {
+        if (!termInstance) return;
+        termInstance.options.fontSize = parseInt(size);
+        if (termFitAddon) termFitAddon.fit();
+        sendResize();
+    }
+
+    function changeTermTheme(themeName) {
+        if (!termInstance) return;
+        const theme = termThemes[themeName];
+        if (!theme) return;
+        termInstance.options.theme = theme;
+        const container = document.getElementById('terminal-container');
+        if (container) container.style.background = theme.background;
+    }
+
+    let termLogBuffer = [];
+    const TERM_LOG_MAX = 10000;
+
+    function termLogAppend(data) {
+        termLogBuffer.push(data);
+        if (termLogBuffer.length > TERM_LOG_MAX) {
+            termLogBuffer = termLogBuffer.slice(termLogBuffer.length - TERM_LOG_MAX);
+        }
+    }
+
+    function exportTermLog() {
+        if (!termLogBuffer.length) { alert('暂无终端日志可导出'); return; }
+        let text = '';
+        for (const chunk of termLogBuffer) {
+            if (typeof chunk === 'string') {
+                text += chunk;
+            } else {
+                text += new TextDecoder().decode(chunk);
+            }
+        }
+        const cleaned = text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\].*?\x07/g, '').replace(/\r/g, '');
+        const blob = new Blob([cleaned], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const d = new Date();
+        const fname = 'term_log_' + d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0') + '_' + String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0') + String(d.getSeconds()).padStart(2,'0') + '.txt';
+        a.href = url;
+        a.download = fname;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
     // ==================== Terminal (xterm.js + WebSocket) ====================
     function initTerminal() {
         termInitialized = true;
@@ -343,7 +506,8 @@
             cursorBlink: true,
             fontSize: 14,
             fontFamily: '"Cascadia Code", "Fira Code", Menlo, Monaco, monospace',
-            theme: { background: '#1e1e1e', foreground: '#d4d4d4', cursor: '#d4d4d4' },
+            theme: termThemes['github_dark'],
+            scrollback: 10000,
             allowProposedApi: true
         });
         termFitAddon = new FitAddon.FitAddon();
@@ -420,18 +584,32 @@
         termWs.onopen = () => {
             termInstance.writeln('\x1b[32m✔ Connected to remote shell\x1b[0m\r\n');
             sendResize();
+            updateTermStatus(true);
         };
 
         termWs.onmessage = (e) => {
-            termInstance.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data));
+            const data = typeof e.data === 'string' ? e.data : new Uint8Array(e.data);
+            termInstance.write(data);
+            termLogAppend(e.data);
         };
 
         termWs.onclose = () => {
             termInstance.writeln('\r\n\x1b[31m✘ Connection closed. Click terminal to reconnect.\x1b[0m');
-            termWs = null;   // ✅ 标记断开，便于 switchTab / 点击判断
+            termWs = null;
+            updateTermStatus(false);
         };
 
         termWs.onerror = () => {};
+    }
+
+    function updateTermStatus(online) {
+        const dot = document.getElementById('term-status-dot');
+        if (!dot) return;
+        if (online) {
+            dot.classList.remove('offline');
+        } else {
+            dot.classList.add('offline');
+        }
     }
 
     function sendResize() {

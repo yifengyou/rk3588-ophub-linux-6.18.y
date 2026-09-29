@@ -22,6 +22,7 @@ openssh-server
 openssh-sftp-server
 pciutils
 sgdisk
+smartmontools
 u-boot-tools
 util-linux
 xfsprogs
