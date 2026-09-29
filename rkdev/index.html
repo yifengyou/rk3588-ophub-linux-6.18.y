@@ -131,6 +131,28 @@
         .spinner { width: 50px; height: 50px; border: 5px solid #f3f3f3; border-top-color: #2c5aa0; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
+        .nav-about { padding: 8px 18px; color: #2c5aa0; border: 1px solid #2c5aa0; border-radius: 4px; font-size: 14px; font-weight: bold; cursor: pointer; transition: all .2s; }
+        .nav-about:hover { background: #2c5aa0; color: #fff; }
+
+        #about-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 10000; justify-content: center; align-items: center; }
+        #about-overlay.visible { display: flex; }
+        .about-modal { background: #fff; border-radius: 10px; box-shadow: 0 8px 32px rgba(0,0,0,.2); max-width: 560px; width: 90%; max-height: 85vh; overflow-y: auto; }
+        .about-header { display: flex; justify-content: space-between; align-items: center; padding: 20px 24px; border-bottom: 1px solid #eee; }
+        .about-header h2 { color: #2c5aa0; font-size: 20px; margin: 0; }
+        .about-close { font-size: 28px; color: #aaa; cursor: pointer; line-height: 1; user-select: none; }
+        .about-close:hover { color: #333; }
+        .about-body { padding: 20px 24px; }
+        .about-version { margin-bottom: 12px; }
+        .about-desc { font-size: 14px; color: #555; line-height: 1.7; margin-bottom: 16px; }
+        .about-section h3 { font-size: 15px; color: #2c5aa0; margin-bottom: 8px; }
+        .about-section ul { padding-left: 20px; font-size: 13px; color: #555; line-height: 1.8; }
+        .about-disclaimer { background: #fff8e1; border: 1px solid #ffe082; border-radius: 8px; padding: 14px 18px; margin: 16px 0; }
+        .about-disclaimer h3 { color: #8d6e00; }
+        .about-disclaimer ul { color: #8d6e00; }
+        .about-footer { text-align: center; padding-top: 12px; border-top: 1px solid #eee; font-size: 13px; }
+        .about-footer a { color: #2c5aa0; text-decoration: none; }
+        .about-footer a:hover { text-decoration: underline; }
+
         .footer { position: fixed; bottom: 0; left: 0; width: 100%; text-align: center; padding: 12px 0; background: #f0f2f5; border-top: 1px solid #e0e0e0; z-index: 100; }
         .footer-line { display: inline-flex; align-items: center; gap: 8px; color: #aaa; font-size: 13px; }
         .footer-line .dot { width: 3px; height: 3px; background: #ccc; border-radius: 50%; }
@@ -283,6 +305,7 @@
         .update-progress-bar { width: 100%; height: 6px; background: #eef2fa; border-radius: 3px; margin-top: 10px; overflow: hidden; display: none; }
         .update-progress-bar.visible { display: block; }
         .update-progress-bar .bar-fill { height: 100%; background: #2c5aa0; border-radius: 3px; transition: width .3s; width: 0%; }
+        .update-warning-box { background: #fff8e1; border: 1px solid #ffe082; border-radius: 6px; padding: 10px 16px; font-size: 13px; color: #8d6e00; margin-bottom: 15px; line-height: 1.6; }
     </style>
 </head>
 <body>
@@ -293,6 +316,43 @@
     <p id="reboot-status" style="color:#666;margin-top:10px;">正在等待设备离线</p>
 </div>
 
+<div id="about-overlay" onclick="if(event.target===this)hideAbout()">
+    <div class="about-modal">
+        <div class="about-header">
+            <h2>彼度云 G98/Z98 固件更新助手</h2>
+            <span class="about-close" onclick="hideAbout()">&times;</span>
+        </div>
+        <div class="about-body">
+            <p class="about-version">版本: <span class="ver-tag">v{{.BuildTime}}</span></p>
+            <p class="about-desc">本项目为彼度云 G98/Z98 (RK3588) 设备的固件刷写与维护工具，提供固件刷写、引导顺序配置、存储健康检测、终端访问及在线更新等功能。</p>
+            <div class="about-section">
+                <h3>📋 功能说明</h3>
+                <ul>
+                    <li>⚡ 固件刷写 — 支持上传固件镜像刷写到设备存储</li>
+                    <li>🔀 引导顺序 — 配置 U-Boot bootcmd 启动顺序</li>
+                    <li>💾 存储检测 — 调用 smartctl/sgdisk 检测存储设备健康状态</li>
+                    <li>📦 更新助手 — 通过 GitHub 在线更新 SPI Recovery 镜像</li>
+                    <li>💻 终端 — 远程 Web Shell 访问设备命令行</li>
+                </ul>
+            </div>
+            <div class="about-disclaimer">
+                <h3>⚠️ 免责声明</h3>
+                <ul>
+                    <li><strong>按原样提供</strong>：本工具不作任何明示或暗示的保证，使用风险由用户自行承担。</li>
+                    <li><strong>无官方关联</strong>：本项目与 Rockchip、彼度云等任何商业实体无关，为非盈利自由分享。</li>
+                    <li><strong>操作风险</strong>：刷写固件、修改引导配置、写入 SPI Flash 等操作可能导致设备变砖或数据丢失，请确保了解风险后再操作。</li>
+                    <li><strong>安全提示</strong>：部署后请及时更新安全补丁、修改默认密码、配置防火墙及访问控制策略。</li>
+                </ul>
+            </div>
+            <div class="about-footer">
+                <a href="https://github.com/yifengyou" target="_blank">GitHub: yifengyou</a>
+                <span> | </span>
+                <a href="https://github.com/yifengyou/BDY_G98_RK3588" target="_blank">项目仓库</a>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="navbar">
     <div class="nav-tab active" data-panel="flash-panel" onclick="switchTab(this)">⚡ 固件刷写</div>
     <div class="nav-tab" data-panel="boot-panel" onclick="switchTab(this)">🔀 引导顺序</div>
@@ -300,6 +360,7 @@
     <div class="nav-tab" data-panel="update-panel" onclick="switchTab(this)">📦 更新助手</div>
     <div class="nav-tab" data-panel="terminal-panel" onclick="switchTab(this)">💻 终端</div>
     <div class="nav-actions">
+        <div class="nav-about" onclick="showAbout()">ℹ️ 关于</div>
         <div class="nav-reboot" id="nav-reboot-btn" onclick="triggerReboot(event)">🔄 重启系统</div>
     </div>
 </div>
@@ -482,10 +543,14 @@
 
         <div class="update-section">
             <div class="update-section-title">🌐 网络更新</div>
-            <p style="font-size:13px;color:#666;margin-bottom:12px;">通过下载代理检测 GitHub 仓库是否有新版本，检测到更新后可一键下载并安装。</p>
+            <p style="font-size:13px;color:#666;margin-bottom:12px;">检测 GitHub 仓库是否有新版本，检测到更新后可一键下载并写入 SPI Flash。</p>
+            <div class="update-warning-box">⚠️ <strong>更新写入 SPI Flash 为同步操作，整个过程可能耗时 5-10 分钟。</strong>更新期间请勿关闭浏览器、断开电源或重启设备，否则可能导致设备无法启动。</div>
             <div class="update-proxy-row">
-                <span class="update-proxy-label">下载代理:</span>
-                <input type="text" class="update-proxy-input" id="update-proxy" placeholder="例如 https://mirror.example.com/proxy?url=" value="">
+                <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#666;white-space:nowrap;cursor:pointer;user-select:none;">
+                    <input type="checkbox" id="update-proxy-enable" onchange="onProxyToggle()">
+                    <span>启用下载代理</span>
+                </label>
+                <input type="text" class="update-proxy-input" id="update-proxy" placeholder="例如 https://mirror.example.com/proxy?url=" value="" disabled>
             </div>
             <div class="update-actions">
                 <button type="button" class="update-btn update-btn-check" onclick="checkUpdate()">🔍 检测更新</button>
@@ -498,6 +563,7 @@
         <div class="update-section">
             <div class="update-section-title">📤 上传更新</div>
             <p style="font-size:13px;color:#666;margin-bottom:12px;">上传本地 .img 镜像文件来更新刷机助手。</p>
+            <div class="update-warning-box">⚠️ <strong>更新写入 SPI Flash 为同步操作，整个过程可能耗时 5-10 分钟。</strong>更新期间请勿关闭浏览器、断开电源或重启设备，否则可能导致设备无法启动。</div>
             <div class="update-upload-area" id="update-upload-area" onclick="document.getElementById('update-file-input').click()">
                 <div class="update-upload-icon">📦</div>
                 <div class="update-upload-text">点击选择文件或拖拽文件到此区域</div>
@@ -1018,6 +1084,10 @@
         }
     }
 
+    // ==================== About ====================
+    function showAbout() { document.getElementById('about-overlay').classList.add('visible'); }
+    function hideAbout() { document.getElementById('about-overlay').classList.remove('visible'); }
+
     // ==================== Reboot ====================
     async function triggerReboot(e) {
         e.preventDefault();
@@ -1508,9 +1578,18 @@
         el.className = 'update-status';
     }
 
+    function onProxyToggle() {
+        var enabled = document.getElementById('update-proxy-enable').checked;
+        document.getElementById('update-proxy').disabled = !enabled;
+    }
+
     async function checkUpdate() {
-        const proxy = document.getElementById('update-proxy').value.trim();
-        const statusEl = 'update-net-status';
+        var proxy = '';
+        if (document.getElementById('update-proxy-enable').checked) {
+            proxy = document.getElementById('update-proxy').value.trim();
+            if (!proxy) { showUpdateStatus('update-net-status', '⚠️ 已启用代理但未填写代理地址', 'warning'); return; }
+        }
+        var statusEl = 'update-net-status';
         const dlBtn = document.getElementById('btn-update-download');
         dlBtn.disabled = true;
         showUpdateStatus(statusEl, '⏳ 正在检测更新...', 'info');
@@ -1519,7 +1598,8 @@
             const resp = await fetch('/api/update_check?proxy=' + encodeURIComponent(proxy));
             const data = await resp.json();
             if (data.hasUpdate) {
-                showUpdateStatus(statusEl, '✅ 发现新版本: ' + data.latestVersion + '（当前: v{{.BuildTime}}）\n' + (data.releaseNote || ''), 'success');
+                var sizeText = data.downloadSize ? ' (' + (data.downloadSize/1024/1024).toFixed(1) + ' MB)' : '';
+                showUpdateStatus(statusEl, '✅ 发现新版本: ' + data.latestVersion + '（当前: v{{.BuildTime}}）' + sizeText, 'success');
                 dlBtn.disabled = false;
                 dlBtn.dataset.downloadUrl = data.downloadUrl || '';
             } else if (data.latestVersion) {
@@ -1532,39 +1612,103 @@
         }
     }
 
+    function fmtSpeed(bytesPerSec) {
+        if (bytesPerSec <= 0) return '0 B/s';
+        if (bytesPerSec < 1024) return bytesPerSec.toFixed(0) + ' B/s';
+        if (bytesPerSec < 1048576) return (bytesPerSec/1024).toFixed(1) + ' KB/s';
+        return (bytesPerSec/1048576).toFixed(1) + ' MB/s';
+    }
+
+    function fmtEta(seconds) {
+        if (seconds <= 0 || !isFinite(seconds)) return '--';
+        if (seconds < 60) return Math.ceil(seconds) + ' 秒';
+        if (seconds < 3600) return Math.floor(seconds/60) + ' 分 ' + Math.ceil(seconds%60) + ' 秒';
+        return Math.floor(seconds/3600) + ' 时 ' + Math.floor((seconds%3600)/60) + ' 分';
+    }
+
+    function fmtBytes(n) {
+        if (n <= 0) return '0 B';
+        if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
+        if (n < 1073741824) return (n/1048576).toFixed(1) + ' MB';
+        return (n/1073741824).toFixed(2) + ' GB';
+    }
+
     async function downloadUpdate() {
-        const dlBtn = document.getElementById('btn-update-download');
-        const url = dlBtn.dataset.downloadUrl;
+        var dlBtn = document.getElementById('btn-update-download');
+        var url = dlBtn.dataset.downloadUrl;
         if (!url) { showUpdateStatus('update-net-status', '❌ 无下载地址', 'error'); return; }
+
+        var proxy = '';
+        if (document.getElementById('update-proxy-enable').checked) {
+            proxy = document.getElementById('update-proxy').value.trim();
+            if (proxy && url.indexOf('http') === 0) {
+                url = proxy + url;
+            }
+        }
 
         dlBtn.disabled = true;
         dlBtn.textContent = '⏳ 下载中...';
-        showUpdateStatus('update-net-status', '⏳ 正在下载更新...', 'info');
         document.getElementById('update-progress-bar').classList.add('visible');
         document.getElementById('update-bar-fill').style.width = '0%';
+        showUpdateStatus('update-net-status', '⏳ 正在下载更新...', 'info');
 
         try {
-            const resp = await fetch('/api/update_download', {
+            var resp = await fetch('/api/update_download', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ url: url })
             });
-            const data = await resp.json();
-            if (resp.ok && !data.error) {
-                document.getElementById('update-bar-fill').style.width = '100%';
-                showUpdateStatus('update-net-status', '✅ 下载完成，正在安装...', 'success');
-                setTimeout(function() {
-                    showUpdateStatus('update-net-status', '✅ 更新安装完成，即将重启服务...', 'success');
-                }, 1000);
-            } else {
-                showUpdateStatus('update-net-status', '❌ 下载失败: ' + (data.error || '未知错误'), 'error');
-                dlBtn.disabled = false;
+
+            var reader = resp.body.getReader();
+            var decoder = new TextDecoder();
+            var buffer = '';
+
+            while (true) {
+                var chunk = await reader.read();
+                if (chunk.done) break;
+                buffer += decoder.decode(chunk.value, { stream: true });
+                var lines = buffer.split('\n');
+                buffer = lines.pop();
+                var eventType = '';
+                for (var i = 0; i < lines.length; i++) {
+                    var line = lines[i];
+                    if (line.startsWith('event: ')) {
+                        eventType = line.slice(7).trim();
+                    } else if (line.startsWith('data: ') && eventType) {
+                        var data = JSON.parse(line.slice(6));
+                        handleUpdateSSE(eventType, data, dlBtn);
+                        eventType = '';
+                    }
+                }
             }
         } catch (e) {
             showUpdateStatus('update-net-status', '❌ 请求失败: ' + e.message, 'error');
             dlBtn.disabled = false;
         } finally {
             dlBtn.textContent = '⬇️ 下载并安装';
+        }
+    }
+
+    function handleUpdateSSE(event, data, dlBtn) {
+        if (event === 'progress') {
+            var pct = data.percent || 0;
+            document.getElementById('update-bar-fill').style.width = pct.toFixed(1) + '%';
+            var phaseText = data.phase === 'flashing' ? '写入 SPI Flash' : '下载镜像';
+            var totalText = data.total > 0 ? fmtBytes(data.total) : '未知';
+            var writtenText = fmtBytes(data.written || 0);
+            var speedText = fmtSpeed(data.speed || 0);
+            var etaText = fmtEta(data.eta || 0);
+            var msg = '⏳ ' + phaseText + '：' + writtenText + ' / ' + totalText +
+                '  |  速度: ' + speedText + '  |  剩余: ' + etaText +
+                '  |  ' + pct.toFixed(1) + '%';
+            showUpdateStatus('update-net-status', msg, 'info');
+        } else if (event === 'done') {
+            document.getElementById('update-bar-fill').style.width = '100%';
+            showUpdateStatus('update-net-status', '✅ ' + data.message, 'success');
+        } else if (event === 'error') {
+            document.getElementById('update-progress-bar').classList.remove('visible');
+            showUpdateStatus('update-net-status', '❌ ' + data.error, 'error');
+            dlBtn.disabled = false;
         }
     }
 
@@ -1595,13 +1739,10 @@
             formData.append('file', updateFileInfo);
             const resp = await fetch('/api/update_upload', { method: 'POST', body: formData });
             const data = await resp.json();
-            if (resp.ok && !data.error) {
-                showUpdateStatus('update-upload-status', '✅ 上传成功，正在安装更新...', 'success');
-                setTimeout(function() {
-                    showUpdateStatus('update-upload-status', '✅ 更新安装完成，即将重启服务...', 'success');
-                }, 1000);
+            if (resp.ok && data.success) {
+                showUpdateStatus('update-upload-status', '✅ ' + data.message, 'success');
             } else {
-                showUpdateStatus('update-upload-status', '❌ 上传失败: ' + (data.error || '未知错误'), 'error');
+                showUpdateStatus('update-upload-status', '❌ 更新失败: ' + (data.error || '未知错误'), 'error');
             }
         } catch (e) {
             showUpdateStatus('update-upload-status', '❌ 请求失败: ' + e.message, 'error');

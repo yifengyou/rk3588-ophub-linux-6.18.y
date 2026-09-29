@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"compress/bzip2"
 	"compress/gzip"
+	"crypto/tls"
 	"embed"
 	"encoding/binary"
 	"encoding/json"
@@ -2785,5 +2786,568 @@ func parseSmartAttrs(text string) []SmartAttr {
 		}
 	}
 	return attrs
+}
+
+// ============ Update Helper ============
+
+const (
+	githubReleaseAPI = "https://api.github.com/repos/yifengyou/BDY_G98_RK3588/releases/tags/spi_recovery_uboot2026"
+	updateTmpFile    = "/tmp/update.img"
+	updateTargetDev  = "/dev/mtdblock0"
+)
+
+type GithubAsset struct {
+	Name               string `json:"name"`
+	Size               int64  `json:"size"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+	UpdatedAt          string `json:"updated_at"`
+}
+
+type GithubRelease struct {
+	TagName  string        `json:"tag_name"`
+	Name     string        `json:"name"`
+	Body     string        `json:"body"`
+	Assets   []GithubAsset `json:"assets"`
+}
+
+func handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	proxy := r.URL.Query().Get("proxy")
+
+	asset, version, err := findLatestSpiImage(githubReleaseAPI, proxy)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"hasUpdate":      false,
+			"latestVersion":  "",
+			"currentVersion": buildTime,
+			"downloadUrl":    "",
+			"releaseNote":    "",
+			"error":          err.Error(),
+		})
+		return
+	}
+
+	hasUpdate := version != "" && version != buildTime
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"hasUpdate":      hasUpdate,
+		"latestVersion":  version,
+		"currentVersion": buildTime,
+		"downloadUrl":    asset.BrowserDownloadURL,
+		"downloadSize":   asset.Size,
+		"releaseNote":    "",
+		"error":          "",
+	})
+}
+
+func findLatestSpiImage(apiURL, proxy string) (*GithubAsset, string, error) {
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	client := &http.Client{Timeout: 30 * time.Second, Transport: tr}
+
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("创建请求失败: %v", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "rkdev-update-checker")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		if proxy != "" {
+			proxiedURL := proxy + apiURL
+			req2, err2 := http.NewRequest("GET", proxiedURL, nil)
+			if err2 != nil {
+				return nil, "", fmt.Errorf("代理请求创建失败: %v", err2)
+			}
+			req2.Header.Set("Accept", "application/vnd.github+json")
+			req2.Header.Set("User-Agent", "rkdev-update-checker")
+			resp, err = client.Do(req2)
+		}
+		if err != nil {
+			return nil, "", fmt.Errorf("请求 GitHub API 失败: %v", err)
+		}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, "", fmt.Errorf("GitHub API 返回状态码: %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("读取响应失败: %v", err)
+	}
+
+	var release GithubRelease
+	if err := json.Unmarshal(body, &release); err != nil {
+		return nil, "", fmt.Errorf("解析 JSON 失败: %v", err)
+	}
+
+	var bestAsset *GithubAsset
+	var bestTimestamp string
+
+	for i := range release.Assets {
+		asset := &release.Assets[i]
+		name := asset.Name
+
+		var timestamp string
+		if strings.HasPrefix(name, "spi_full_disk_") && strings.HasSuffix(name, ".img") {
+			middle := strings.TrimPrefix(name, "spi_full_disk_")
+			middle = strings.TrimSuffix(middle, ".img")
+			if len(middle) == 8 && isAllDigits(middle) {
+				timestamp = middle
+			}
+		}
+
+		if timestamp == "" {
+			continue
+		}
+
+		if bestTimestamp == "" || timestamp > bestTimestamp {
+			bestTimestamp = timestamp
+			bestAsset = asset
+		}
+	}
+
+	if bestAsset == nil {
+		return nil, "", fmt.Errorf("未找到 spi_full_disk_*.img 镜像文件")
+	}
+
+	version := bestTimestamp
+	return bestAsset, version, nil
+}
+
+func isAllDigits(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// ============ Update Background Task ============
+
+type UpdateProgress struct {
+	mu       sync.Mutex
+	Phase    string  `json:"phase"`
+	Percent  float64 `json:"percent"`
+	Written  int64   `json:"written"`
+	Total    int64   `json:"total"`
+	Speed    float64 `json:"speed"`
+	Eta      float64 `json:"eta"`
+	Done     bool    `json:"done"`
+	Error    string  `json:"error"`
+	Success  bool    `json:"success"`
+	Message  string  `json:"message"`
+	Running  bool    `json:"running"`
+}
+
+var updateProgress UpdateProgress
+
+func startUpdateTask(downloadURL string) {
+	updateProgress.mu.Lock()
+	if updateProgress.Running {
+		updateProgress.mu.Unlock()
+		return
+	}
+	updateProgress.Running = true
+	updateProgress.Done = false
+	updateProgress.Error = ""
+	updateProgress.Success = false
+	updateProgress.Phase = "downloading"
+	updateProgress.Percent = 0
+	updateProgress.Written = 0
+	updateProgress.Total = 0
+	updateProgress.mu.Unlock()
+
+	go func() {
+		defer func() {
+			updateProgress.mu.Lock()
+			updateProgress.Running = false
+			updateProgress.mu.Unlock()
+		}()
+
+		advLog("info", "开始下载更新镜像: " + downloadURL)
+
+		client := &http.Client{Timeout: 10 * time.Minute, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+		resp, err := client.Get(downloadURL)
+		if err != nil {
+			updateProgress.mu.Lock()
+			updateProgress.Error = "下载失败: " + err.Error()
+			updateProgress.mu.Unlock()
+			advLog("error", "下载失败: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			updateProgress.mu.Lock()
+			updateProgress.Error = fmt.Sprintf("下载返回状态码: %d", resp.StatusCode)
+			updateProgress.mu.Unlock()
+			return
+		}
+
+		totalSize := resp.ContentLength
+		tmpPath := updateTmpFile
+		f, err := os.Create(tmpPath)
+		if err != nil {
+			updateProgress.mu.Lock()
+			updateProgress.Error = "创建临时文件失败: " + err.Error()
+			updateProgress.mu.Unlock()
+			return
+		}
+
+		buf := make([]byte, 256*1024)
+		var written int64
+		startTime := time.Now()
+		lastReport := startTime
+
+		for {
+			n, readErr := resp.Body.Read(buf)
+			if n > 0 {
+				wn, werr := f.Write(buf[:n])
+				written += int64(wn)
+				now := time.Now()
+				if now.Sub(lastReport) >= 500*time.Millisecond || (readErr != nil && written > 0) {
+					elapsed := now.Sub(startTime).Seconds()
+					speed := float64(0)
+					if elapsed > 0 {
+						speed = float64(written) / elapsed
+					}
+					percent := float64(0)
+					if totalSize > 0 {
+						percent = float64(written) / float64(totalSize) * 100
+					}
+					eta := float64(0)
+					if speed > 0 && totalSize > 0 {
+						eta = float64(totalSize-written) / speed
+					}
+					updateProgress.mu.Lock()
+					updateProgress.Phase = "downloading"
+					updateProgress.Percent = percent
+					updateProgress.Written = written
+					updateProgress.Total = totalSize
+					updateProgress.Speed = speed
+					updateProgress.Eta = eta
+					updateProgress.mu.Unlock()
+					lastReport = now
+				}
+				if werr != nil {
+					f.Close()
+					updateProgress.mu.Lock()
+					updateProgress.Error = "写入文件失败: " + werr.Error()
+					updateProgress.mu.Unlock()
+					return
+				}
+			}
+			if readErr != nil {
+				break
+			}
+		}
+		f.Close()
+
+		advLog("info", "下载完成: %s (%d 字节)", tmpPath, written)
+
+		updateProgress.mu.Lock()
+		updateProgress.Phase = "flashing"
+		updateProgress.Percent = 0
+		updateProgress.Written = 0
+		updateProgress.Total = written
+		updateProgress.Speed = 0
+		updateProgress.Eta = 0
+		updateProgress.mu.Unlock()
+
+		advLog("info", "开始同步写入 " + updateTargetDev)
+		devFile, err := os.OpenFile(updateTargetDev, os.O_WRONLY|os.O_SYNC, 0)
+		if err != nil {
+			updateProgress.mu.Lock()
+			updateProgress.Error = "打开设备失败: " + err.Error()
+			updateProgress.mu.Unlock()
+			return
+		}
+		defer devFile.Close()
+
+		srcFile, err := os.Open(tmpPath)
+		if err != nil {
+			updateProgress.mu.Lock()
+			updateProgress.Error = "打开下载文件失败: " + err.Error()
+			updateProgress.mu.Unlock()
+			return
+		}
+		defer srcFile.Close()
+
+		flashBuf := make([]byte, 4*1024)
+		var writtenDev int64
+		flashStart := time.Now()
+
+		for {
+			n, readErr := srcFile.Read(flashBuf)
+			if n > 0 {
+				wn, werr := devFile.Write(flashBuf[:n])
+				writtenDev += int64(wn)
+				now := time.Now()
+				elapsed := now.Sub(flashStart).Seconds()
+				speed := float64(0)
+				if elapsed > 0 {
+					speed = float64(writtenDev) / elapsed
+				}
+				percent := float64(0)
+				if written > 0 {
+					percent = float64(writtenDev) / float64(written) * 100
+				}
+				eta := float64(0)
+				if speed > 0 && written > 0 {
+					eta = float64(written-writtenDev) / speed
+				}
+				updateProgress.mu.Lock()
+				updateProgress.Phase = "flashing"
+				updateProgress.Percent = percent
+				updateProgress.Written = writtenDev
+				updateProgress.Total = written
+				updateProgress.Speed = speed
+				updateProgress.Eta = eta
+				updateProgress.mu.Unlock()
+				if werr != nil {
+					devFile.Close()
+					updateProgress.mu.Lock()
+					updateProgress.Error = "写入设备失败: " + werr.Error()
+					updateProgress.mu.Unlock()
+					advLog("error", "写入设备失败: %v", werr)
+					return
+				}
+			}
+			if readErr != nil {
+				break
+			}
+		}
+		devFile.Close()
+
+		advLog("info", "写入完成: %s (%d 字节)", updateTargetDev, writtenDev)
+		os.Remove(tmpPath)
+
+		updateProgress.mu.Lock()
+		updateProgress.Done = true
+		updateProgress.Success = true
+		updateProgress.Message = "更新已写入 SPI Flash，重启设备后生效"
+		updateProgress.Percent = 100
+		updateProgress.mu.Unlock()
+	}()
+}
+
+func handleUpdateDownload(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "请求参数解析失败: " + err.Error()})
+		return
+	}
+
+	downloadURL := req.URL
+	if downloadURL == "" {
+		asset, _, err := findLatestSpiImage(githubReleaseAPI, "")
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"error": "检测更新失败: " + err.Error()})
+			return
+		}
+		downloadURL = asset.BrowserDownloadURL
+	}
+
+	if downloadURL == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "无有效下载地址"})
+		return
+	}
+
+	startUpdateTask(downloadURL)
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "不支持 SSE"})
+		return
+	}
+
+	for {
+		updateProgress.mu.Lock()
+		data := map[string]interface{}{
+			"phase":   updateProgress.Phase,
+			"percent": updateProgress.Percent,
+			"written": updateProgress.Written,
+			"total":   updateProgress.Total,
+			"speed":   updateProgress.Speed,
+			"eta":     updateProgress.Eta,
+			"running": updateProgress.Running,
+			"done":    updateProgress.Done,
+			"success": updateProgress.Success,
+			"error":   updateProgress.Error,
+			"message": updateProgress.Message,
+		}
+		done := updateProgress.Done || updateProgress.Error != ""
+		running := updateProgress.Running
+		updateProgress.mu.Unlock()
+
+		event := "progress"
+		if data["error"].(string) != "" {
+			event = "error"
+		} else if data["done"].(bool) {
+			event = "done"
+		}
+
+		jsonBytes, _ := json.Marshal(data)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, jsonBytes)
+		flusher.Flush()
+
+		if done || !running {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+func handleUpdateUpload(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	r.ParseMultipartForm(100 << 20)
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "读取上传文件失败: " + err.Error()})
+		return
+	}
+	defer file.Close()
+
+	advLog("info", "收到上传更新文件: " + header.Filename + " (" + formatBytes(header.Size) + ")")
+
+	tmpPath := updateTmpFile
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "创建临时文件失败: " + err.Error()})
+		return
+	}
+
+	written, err := io.Copy(f, file)
+	f.Close()
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "保存文件失败: " + err.Error()})
+		return
+	}
+
+	advLog("info", "上传文件已保存: %s (%d 字节)", tmpPath, written)
+
+	updateProgress.mu.Lock()
+	if updateProgress.Running {
+		updateProgress.mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "已有更新任务正在执行中"})
+		return
+	}
+	updateProgress.Running = true
+	updateProgress.Done = false
+	updateProgress.Error = ""
+	updateProgress.Success = false
+	updateProgress.Phase = "flashing"
+	updateProgress.Percent = 0
+	updateProgress.Written = 0
+	updateProgress.Total = written
+	updateProgress.Speed = 0
+	updateProgress.Eta = 0
+	updateProgress.mu.Unlock()
+
+	go func() {
+		defer func() {
+			updateProgress.mu.Lock()
+			updateProgress.Running = false
+			updateProgress.mu.Unlock()
+		}()
+
+		advLog("info", "开始同步写入 " + updateTargetDev)
+		devFile, err := os.OpenFile(updateTargetDev, os.O_WRONLY|os.O_SYNC, 0)
+		if err != nil {
+			updateProgress.mu.Lock()
+			updateProgress.Error = "打开设备失败: " + err.Error()
+			updateProgress.mu.Unlock()
+			return
+		}
+		defer devFile.Close()
+
+		srcFile, err := os.Open(tmpPath)
+		if err != nil {
+			updateProgress.mu.Lock()
+			updateProgress.Error = "打开上传文件失败: " + err.Error()
+			updateProgress.mu.Unlock()
+			return
+		}
+		defer srcFile.Close()
+
+		flashBuf := make([]byte, 4*1024)
+		var writtenDev int64
+		flashStart := time.Now()
+
+		for {
+			n, readErr := srcFile.Read(flashBuf)
+			if n > 0 {
+				wn, werr := devFile.Write(flashBuf[:n])
+				writtenDev += int64(wn)
+				now := time.Now()
+				elapsed := now.Sub(flashStart).Seconds()
+				speed := float64(0)
+				if elapsed > 0 {
+					speed = float64(writtenDev) / elapsed
+				}
+				percent := float64(0)
+				if written > 0 {
+					percent = float64(writtenDev) / float64(written) * 100
+				}
+				eta := float64(0)
+				if speed > 0 && written > 0 {
+					eta = float64(written-writtenDev) / speed
+				}
+				updateProgress.mu.Lock()
+				updateProgress.Phase = "flashing"
+				updateProgress.Percent = percent
+				updateProgress.Written = writtenDev
+				updateProgress.Total = written
+				updateProgress.Speed = speed
+				updateProgress.Eta = eta
+				updateProgress.mu.Unlock()
+				if werr != nil {
+					devFile.Close()
+					updateProgress.mu.Lock()
+					updateProgress.Error = "写入设备失败: " + werr.Error()
+					updateProgress.mu.Unlock()
+					advLog("error", "写入设备失败: %v", werr)
+					return
+				}
+			}
+			if readErr != nil {
+				break
+			}
+		}
+		devFile.Close()
+
+		advLog("info", "写入完成: %s (%d 字节)", updateTargetDev, writtenDev)
+		os.Remove(tmpPath)
+
+		updateProgress.mu.Lock()
+		updateProgress.Done = true
+		updateProgress.Success = true
+		updateProgress.Message = "更新已写入 SPI Flash，重启设备后生效"
+		updateProgress.Percent = 100
+		updateProgress.mu.Unlock()
+	}()
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "文件已上传，正在后台写入 SPI Flash，请勿关闭设备电源",
+	})
 }
 
