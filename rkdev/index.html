@@ -9,7 +9,7 @@
     <script src="/res/addon-fit.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: "Microsoft YaHei", Arial, sans-serif; background: #f0f2f5; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+        body { font-family: "Microsoft YaHei", Arial, sans-serif; background: #f0f2f5; display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding-bottom: 60px; }
 
         .navbar { width: 100%; background: #fff; padding: 0 20px; box-shadow: 0 2px 4px rgba(0,0,0,.1); display: flex; justify-content: center; align-items: center; gap: 0; margin-bottom: 30px; }
         .nav-tab { padding: 15px 30px; font-size: 16px; font-weight: bold; color: #5c7ebf; cursor: pointer; border-bottom: 3px solid transparent; transition: all .2s; user-select: none; }
@@ -131,7 +131,7 @@
         .spinner { width: 50px; height: 50px; border: 5px solid #f3f3f3; border-top-color: #2c5aa0; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        .footer { width: 100%; text-align: center; padding: 20px 0 30px; margin-top: auto; }
+        .footer { position: fixed; bottom: 0; left: 0; width: 100%; text-align: center; padding: 12px 0; background: #f0f2f5; border-top: 1px solid #e0e0e0; z-index: 100; }
         .footer-line { display: inline-flex; align-items: center; gap: 8px; color: #aaa; font-size: 13px; }
         .footer-line .dot { width: 3px; height: 3px; background: #ccc; border-radius: 50%; }
         .footer-line a { color: #5c7ebf; text-decoration: none; transition: color .2s; }
@@ -193,6 +193,96 @@
         .btn-var-reset { padding: 8px 20px; font-size: 13px; border: 1px solid #ccc; border-radius: 6px; cursor: pointer; font-weight: 600; background: #fff; color: #666; transition: all .2s; }
         .btn-var-reset:hover { background: #f5f5f5; }
         .btn-var-reset:disabled { background: #f5f5f5; color: #ccc; border-color: #eee; cursor: not-allowed; }
+
+        /* ===== Storage Panel ===== */
+        .storage-card { background: #fff; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.05); }
+        .storage-card h1 { color: #2c5aa0; font-size: 28px; margin-bottom: 8px; }
+        .storage-card .subtitle { color: #666; font-size: 14px; margin-bottom: 25px; }
+        .storage-actions { display: flex; gap: 10px; justify-content: center; margin-bottom: 25px; }
+        .btn-storage-refresh { padding: 10px 24px; font-size: 14px; border: 1px solid #d4dfee; border-radius: 6px; cursor: pointer; font-weight: 600; background: #eef2fa; color: #2c5aa0; transition: all .2s; }
+        .btn-storage-refresh:hover { background: #2c5aa0; color: #fff; }
+        .storage-device { background: #f8faff; border: 1px solid #d4dfee; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+        .storage-device-header { display: flex; align-items: center; gap: 12px; margin-bottom: 15px; }
+        .storage-device-icon { font-size: 24px; }
+        .storage-device-title { font-size: 18px; font-weight: 700; color: #2c5aa0; }
+        .storage-device-meta { font-size: 13px; color: #888; margin-left: auto; display: flex; gap: 15px; }
+        .storage-device-meta span { white-space: nowrap; }
+        .storage-section-title { font-size: 14px; font-weight: 700; color: #555; margin: 15px 0 8px 0; padding-bottom: 5px; border-bottom: 1px solid #eee; }
+        .storage-part-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .storage-part-table th { background: #eef2fa; color: #2c5aa0; padding: 8px 10px; text-align: left; font-weight: 600; }
+        .storage-part-table td { padding: 6px 10px; border-bottom: 1px solid #eee; }
+        .storage-part-table tr:hover td { background: #f8faff; }
+        .storage-smart-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin-bottom: 12px; }
+        .smart-item { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 10px 14px; }
+        .smart-item .smart-label { font-size: 11px; color: #aaa; margin-bottom: 2px; }
+        .smart-item .smart-value { font-size: 14px; font-weight: 600; color: #333; }
+        .smart-health-passed { color: #28a745; }
+        .smart-health-failed { color: #dc3545; }
+        .smart-attrs-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .smart-attrs-table th { background: #eef2fa; color: #2c5aa0; padding: 6px 10px; text-align: left; font-weight: 600; }
+        .smart-attrs-table td { padding: 4px 10px; border-bottom: 1px solid #f0f0f0; }
+        .smart-unavailable { color: #aaa; font-size: 13px; padding: 10px 0; }
+        .storage-loading { text-align: center; color: #aaa; padding: 40px 0; font-size: 15px; }
+        .smart-detail-toggle { display: inline-block; margin: 6px 0 0 0; padding: 4px 14px; font-size: 12px; font-weight: 600; border: 1px solid #d4dfee; border-radius: 4px; cursor: pointer; background: #fff; color: #5c7ebf; transition: all .2s; user-select: none; }
+        .smart-detail-toggle:hover { background: #eef2fa; border-color: #2c5aa0; color: #2c5aa0; }
+        .smart-detail { display: none; margin-top: 6px; overflow: hidden; }
+        .smart-detail.visible { display: block; }
+        .part-detail-toggle { display: inline-block; margin: 6px 0 0 0; padding: 4px 14px; font-size: 12px; font-weight: 600; border: 1px solid #d4dfee; border-radius: 4px; cursor: pointer; background: #fff; color: #5c7ebf; transition: all .2s; user-select: none; }
+        .part-detail-toggle:hover { background: #eef2fa; border-color: #2c5aa0; color: #2c5aa0; }
+        .part-detail { display: none; }
+        .part-detail.visible { display: block; }
+        .detail-group { margin-top: 4px; }
+        .smart-raw-output { background: #0d1117; color: #c9d1d9; padding: 16px; border-radius: 6px; font-size: 12px; font-family: "Cascadia Code", "Fira Code", Menlo, Monaco, monospace; overflow: auto; max-height: 400px; white-space: pre; line-height: 1.6; border: 1px solid #30363d; }
+        .smart-raw-output::-webkit-scrollbar { width: 8px; height: 8px; }
+        .smart-raw-output::-webkit-scrollbar-track { background: #161b22; border-radius: 4px; }
+        .smart-raw-output::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
+        .smart-raw-output::-webkit-scrollbar-thumb:hover { background: #484f58; }
+        .smart-attrs-table { width: 100%; border-collapse: collapse; font-size: 12px; border: 1px solid #e0e0e0; border-radius: 6px; overflow: hidden; }
+        .smart-attrs-table th { background: #2c5aa0; color: #fff; padding: 8px 12px; text-align: left; font-weight: 600; }
+        .smart-attrs-table td { padding: 6px 12px; border-bottom: 1px solid #f0f0f0; }
+        .smart-attrs-table tr:nth-child(even) td { background: #f8faff; }
+        .smart-attrs-table tr:hover td { background: #eef2fa; }
+
+        /* ===== Update Panel ===== */
+        .update-card { background: #fff; padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.05); }
+        .update-card h1 { color: #2c5aa0; font-size: 28px; margin-bottom: 8px; }
+        .update-card .subtitle { color: #666; font-size: 14px; margin-bottom: 25px; }
+        .update-section { margin-bottom: 30px; }
+        .update-section-title { font-size: 16px; font-weight: 700; color: #2c5aa0; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid #eef2fa; }
+        .update-upload-area { border: 2px dashed #d4dfee; border-radius: 8px; padding: 30px; text-align: center; transition: all .2s; cursor: pointer; }
+        .update-upload-area:hover { border-color: #2c5aa0; background: #f8faff; }
+        .update-upload-area.dragover { border-color: #2c5aa0; background: #eef2fa; }
+        .update-upload-icon { font-size: 40px; margin-bottom: 10px; }
+        .update-upload-text { font-size: 14px; color: #666; margin-bottom: 6px; }
+        .update-upload-hint { font-size: 12px; color: #aaa; }
+        .update-upload-area input[type=file] { display: none; }
+        .update-btn { padding: 10px 24px; font-size: 14px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all .2s; }
+        .update-btn-check { background: #eef2fa; color: #2c5aa0; border: 1px solid #d4dfee; }
+        .update-btn-check:hover { background: #2c5aa0; color: #fff; }
+        .update-btn-download { background: #28a745; color: #fff; }
+        .update-btn-download:hover { background: #218838; }
+        .update-btn-download:disabled { background: #ccc; cursor: not-allowed; }
+        .update-btn-upload { background: #2c5aa0; color: #fff; }
+        .update-btn-upload:hover { background: #1a4a80; }
+        .update-btn-upload:disabled { background: #ccc; cursor: not-allowed; }
+        .update-actions { display: flex; gap: 10px; align-items: center; margin-top: 15px; }
+        .update-proxy-row { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+        .update-proxy-input { flex: 1; padding: 8px 12px; font-size: 13px; border: 1px solid #d4dfee; border-radius: 6px; outline: none; transition: border-color .2s; }
+        .update-proxy-input:focus { border-color: #2c5aa0; }
+        .update-proxy-label { font-size: 13px; color: #666; white-space: nowrap; }
+        .update-status { margin-top: 15px; padding: 12px 16px; border-radius: 6px; font-size: 13px; display: none; }
+        .update-status.visible { display: block; }
+        .update-status.info { background: #e7f4ff; color: #2c5aa0; border: 1px solid #b8dbff; }
+        .update-status.success { background: #e8f5e9; color: #1b7d3a; border: 1px solid #a5d6a7; }
+        .update-status.warning { background: #fff8e1; color: #8d6e00; border: 1px solid #ffe082; }
+        .update-status.error { background: #fde8e8; color: #c0392b; border: 1px solid #f5b7b7; }
+        .update-version-info { display: flex; gap: 20px; margin-bottom: 15px; font-size: 13px; }
+        .update-version-info .v-label { color: #aaa; }
+        .update-version-info .v-value { font-weight: 600; color: #333; }
+        .update-file-info { margin-top: 10px; font-size: 13px; color: #666; }
+        .update-progress-bar { width: 100%; height: 6px; background: #eef2fa; border-radius: 3px; margin-top: 10px; overflow: hidden; display: none; }
+        .update-progress-bar.visible { display: block; }
+        .update-progress-bar .bar-fill { height: 100%; background: #2c5aa0; border-radius: 3px; transition: width .3s; width: 0%; }
     </style>
 </head>
 <body>
@@ -206,6 +296,8 @@
 <div class="navbar">
     <div class="nav-tab active" data-panel="flash-panel" onclick="switchTab(this)">⚡ 固件刷写</div>
     <div class="nav-tab" data-panel="boot-panel" onclick="switchTab(this)">🔀 引导顺序</div>
+    <div class="nav-tab" data-panel="storage-panel" onclick="switchTab(this)">💾 存储检测</div>
+    <div class="nav-tab" data-panel="update-panel" onclick="switchTab(this)">📦 更新助手</div>
     <div class="nav-tab" data-panel="terminal-panel" onclick="switchTab(this)">💻 终端</div>
     <div class="nav-actions">
         <div class="nav-reboot" id="nav-reboot-btn" onclick="triggerReboot(event)">🔄 重启系统</div>
@@ -360,6 +452,63 @@
         <div class="boot-var-actions">
             <button type="button" class="btn-var-reset" id="btn-var-reset" onclick="resetBootVars()" disabled>↩️ 还原修改</button>
             <button type="button" class="btn-var-save" id="btn-var-save" onclick="saveBootVars()" disabled>⚠️ 保存修改</button>
+        </div>
+    </div>
+</div>
+
+<div id="storage-panel" class="panel">
+    <div class="storage-card">
+        <h1>存储检测</h1>
+        <p class="subtitle">检测存储设备的分区表与 SMART 健康状态。调用 smartmontools (smartctl) 和 gdisk (sgdisk) 获取详细信息。</p>
+        <div class="storage-actions">
+            <button type="button" class="btn-storage-refresh" onclick="loadStorageInfo()">🔄 刷新检测</button>
+            <button type="button" class="btn-storage-export" id="btn-storage-export" onclick="exportStorageReport()" disabled>📥 导出报告</button>
+        </div>
+        <div id="storage-content">
+            <div class="storage-loading">点击「刷新检测」获取存储设备信息</div>
+        </div>
+    </div>
+</div>
+
+<div id="update-panel" class="panel">
+    <div class="update-card">
+        <h1>更新助手</h1>
+        <p class="subtitle">通过上传镜像或网络下载更新刷机助手程序。支持 .img 格式镜像文件。</p>
+
+        <div class="update-version-info">
+            <div><span class="v-label">当前版本:</span> <span class="v-value">v{{.BuildTime}}</span></div>
+            <div><span class="v-label">下载源:</span> <span class="v-value">github.com/yifengyou/abc</span></div>
+        </div>
+
+        <div class="update-section">
+            <div class="update-section-title">🌐 网络更新</div>
+            <p style="font-size:13px;color:#666;margin-bottom:12px;">通过下载代理检测 GitHub 仓库是否有新版本，检测到更新后可一键下载并安装。</p>
+            <div class="update-proxy-row">
+                <span class="update-proxy-label">下载代理:</span>
+                <input type="text" class="update-proxy-input" id="update-proxy" placeholder="例如 https://mirror.example.com/proxy?url=" value="">
+            </div>
+            <div class="update-actions">
+                <button type="button" class="update-btn update-btn-check" onclick="checkUpdate()">🔍 检测更新</button>
+                <button type="button" class="update-btn update-btn-download" id="btn-update-download" onclick="downloadUpdate()" disabled>⬇️ 下载并安装</button>
+            </div>
+            <div class="update-status" id="update-net-status"></div>
+            <div class="update-progress-bar" id="update-progress-bar"><div class="bar-fill" id="update-bar-fill"></div></div>
+        </div>
+
+        <div class="update-section">
+            <div class="update-section-title">📤 上传更新</div>
+            <p style="font-size:13px;color:#666;margin-bottom:12px;">上传本地 .img 镜像文件来更新刷机助手。</p>
+            <div class="update-upload-area" id="update-upload-area" onclick="document.getElementById('update-file-input').click()">
+                <div class="update-upload-icon">📦</div>
+                <div class="update-upload-text">点击选择文件或拖拽文件到此区域</div>
+                <div class="update-upload-hint">支持 .img 格式镜像文件</div>
+                <input type="file" id="update-file-input" accept=".img,.bin,.gz" onchange="onUpdateFileSelected(this)">
+            </div>
+            <div class="update-file-info" id="update-file-info"></div>
+            <div class="update-actions">
+                <button type="button" class="update-btn update-btn-upload" id="btn-update-upload" onclick="uploadUpdate()" disabled>⬆️ 上传并更新</button>
+            </div>
+            <div class="update-status" id="update-upload-status"></div>
         </div>
     </div>
 </div>
@@ -1152,6 +1301,331 @@
         saveBtn.disabled = false;
         saveBtn.textContent = '💾 保存顺序';
     }
+
+    // ==================== Storage Detection ====================
+    let storageDataCache = null;
+
+    async function loadStorageInfo() {
+        const content = document.getElementById('storage-content');
+        content.innerHTML = '<div class="storage-loading">⏳ 正在检测存储设备...</div>';
+        document.getElementById('btn-storage-export').disabled = true;
+        try {
+            const resp = await fetch('/api/storage');
+            const data = await resp.json();
+            if (!resp.ok || data.error) {
+                content.innerHTML = '<div class="storage-loading">❌ ' + (data.error || '检测失败') + '</div>';
+                return;
+            }
+            storageDataCache = data.devices || [];
+            renderStorageInfo(storageDataCache);
+            if (storageDataCache.length) {
+                document.getElementById('btn-storage-export').disabled = false;
+            }
+        } catch (e) {
+            content.innerHTML = '<div class="storage-loading">❌ 请求失败: ' + e.message + '</div>';
+        }
+    }
+
+    function renderStorageInfo(devices) {
+        const content = document.getElementById('storage-content');
+        if (!devices.length) {
+            content.innerHTML = '<div class="storage-loading">未检测到存储设备</div>';
+            return;
+        }
+        let html = '';
+        for (let di = 0; di < devices.length; di++) {
+            const dev = devices[di];
+            const icon = dev.type === 'USB' ? '🔌' : dev.type === 'SSD' ? '💾' : '💿';
+            html += '<div class="storage-device">';
+            html += '<div class="storage-device-header">';
+            html += '<span class="storage-device-icon">' + icon + '</span>';
+            html += '<span class="storage-device-title">' + dev.device + '</span>';
+            html += '<div class="storage-device-meta">';
+            if (dev.model) html += '<span>型号: ' + dev.model + '</span>';
+            html += '<span>容量: ' + dev.size + '</span>';
+            html += '<span>类型: ' + dev.type + '</span>';
+            if (dev.transport) html += '<span>接口: ' + dev.transport + '</span>';
+            html += '</div></div>';
+
+            if (dev.partitions && dev.partitions.length) {
+                const partCount = dev.partitions.length;
+                html += '<div class="storage-section-title">📋 分区表 — ' + partCount + ' 个分区</div>';
+                html += '<div class="detail-group">';
+                html += '<span class="part-detail-toggle" onclick="toggleDetail(\'part-' + di + '\', this)">展开分区详情 ▸</span>';
+                html += '<div class="part-detail" id="part-' + di + '">';
+                html += '<table class="storage-part-table" style="margin-top:8px;"><thead><tr><th>#</th><th>起始</th><th>结束</th><th>大小</th><th>代码</th><th>名称</th></tr></thead><tbody>';
+                for (const p of dev.partitions) {
+                    html += '<tr><td>' + p.number + '</td><td>' + p.start + '</td><td>' + p.end + '</td><td>' + p.size + '</td><td>' + (p.code||'-') + '</td><td>' + (p.name||'-') + '</td></tr>';
+                }
+                html += '</tbody></table>';
+                html += '</div>';
+                html += '</div>';
+            }
+
+            html += '<div class="storage-section-title">🩺 SMART 健康状态</div>';
+            if (dev.smart.available) {
+                const healthClass = dev.smart.health === 'PASSED' ? 'smart-health-passed' : (dev.smart.health === 'FAILED' ? 'smart-health-failed' : '');
+                html += '<div class="storage-smart-grid">';
+                if (dev.smart.health) html += '<div class="smart-item"><div class="smart-label">健康状态</div><div class="smart-value ' + healthClass + '">' + dev.smart.health + '</div></div>';
+                if (dev.smart.protocol) html += '<div class="smart-item"><div class="smart-label">协议</div><div class="smart-value">' + dev.smart.protocol + '</div></div>';
+                if (dev.smart.model) html += '<div class="smart-item"><div class="smart-label">型号</div><div class="smart-value">' + dev.smart.model + '</div></div>';
+                if (dev.smart.serial) html += '<div class="smart-item"><div class="smart-label">序列号</div><div class="smart-value">' + dev.smart.serial + '</div></div>';
+                if (dev.smart.firmware) html += '<div class="smart-item"><div class="smart-label">固件版本</div><div class="smart-value">' + dev.smart.firmware + '</div></div>';
+                if (dev.smart.capacity) html += '<div class="smart-item"><div class="smart-label">容量</div><div class="smart-value">' + dev.smart.capacity + '</div></div>';
+                if (dev.smart.temp) html += '<div class="smart-item"><div class="smart-label">温度</div><div class="smart-value">' + dev.smart.temp + '</div></div>';
+                if (dev.smart.hours) html += '<div class="smart-item"><div class="smart-label">通电时长</div><div class="smart-value">' + dev.smart.hours + '</div></div>';
+                if (dev.smart.powerCycles) html += '<div class="smart-item"><div class="smart-label">通电次数</div><div class="smart-value">' + dev.smart.powerCycles + '</div></div>';
+                html += '</div>';
+
+                if (dev.smart.nvmeAttrs && dev.smart.nvmeAttrs.length) {
+                    html += '<div class="detail-group">';
+                    html += '<span class="smart-detail-toggle" onclick="toggleDetail(\'smart-' + di + '\', this)">展开 SMART 完整属性 (' + dev.smart.nvmeAttrs.length + ' 项) ▸</span>';
+                    html += '<div class="smart-detail" id="smart-' + di + '">';
+                    html += '<table class="smart-attrs-table"><thead><tr><th>属性</th><th>值</th></tr></thead><tbody>';
+                    for (const a of dev.smart.nvmeAttrs) {
+                        html += '<tr><td>' + a.key + '</td><td>' + a.value + '</td></tr>';
+                    }
+                    html += '</tbody></table>';
+                    html += '</div>';
+                    html += '</div>';
+                } else if (dev.smart.attrs && dev.smart.attrs.length) {
+                    html += '<div class="detail-group">';
+                    html += '<span class="smart-detail-toggle" onclick="toggleDetail(\'smart-' + di + '\', this)">展开 SMART 属性明细 (' + dev.smart.attrs.length + ' 项) ▸</span>';
+                    html += '<div class="smart-detail" id="smart-' + di + '">';
+                    html += '<table class="smart-attrs-table"><thead><tr><th>ID</th><th>属性名</th><th>值</th><th>最差</th><th>阈值</th><th>原始值</th></tr></thead><tbody>';
+                    for (const a of dev.smart.attrs) {
+                        html += '<tr><td>' + a.id + '</td><td>' + a.name + '</td><td>' + a.value + '</td><td>' + a.worst + '</td><td>' + a.thresh + '</td><td>' + a.raw + '</td></tr>';
+                    }
+                    html += '</tbody></table>';
+                    html += '</div>';
+                    html += '</div>';
+                }
+
+                if (dev.smart.rawFull) {
+                    html += '<div class="detail-group">';
+                    html += '<span class="smart-detail-toggle" onclick="toggleDetail(\'raw-' + di + '\', this)">展开 smartctl 原始输出 ▸</span>';
+                    html += '<div class="smart-detail" id="raw-' + di + '">';
+                    html += '<pre class="smart-raw-output">' + dev.smart.rawFull.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</pre>';
+                    html += '</div>';
+                    html += '</div>';
+                }
+            } else {
+                html += '<div class="smart-unavailable">' + (dev.smart.error || 'SMART 信息不可用（设备可能不支持或未安装 smartmontools）') + '</div>';
+            }
+
+            html += '</div>';
+        }
+        content.innerHTML = html;
+    }
+
+    function toggleDetail(id, btn) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.classList.toggle('visible');
+        if (btn) {
+            if (el.classList.contains('visible')) {
+                btn.innerHTML = btn.innerHTML.replace('▸', '▾');
+            } else {
+                btn.innerHTML = btn.innerHTML.replace('▾', '▸');
+            }
+        }
+    }
+
+    function exportStorageReport() {
+        if (!storageDataCache || !storageDataCache.length) { alert('暂无检测数据可导出'); return; }
+        let text = '存储检测报告\n';
+        text += '生成时间: ' + new Date().toLocaleString() + '\n';
+        text += '='.repeat(60) + '\n\n';
+        for (const dev of storageDataCache) {
+            text += '设备: ' + dev.device + '\n';
+            if (dev.model) text += '  型号:   ' + dev.model + '\n';
+            text += '  容量:   ' + dev.size + '\n';
+            text += '  类型:   ' + dev.type + '\n';
+            if (dev.transport) text += '  接口:   ' + dev.transport + '\n';
+
+            if (dev.partitions && dev.partitions.length) {
+                text += '\n  分区表 (' + dev.partitions.length + ' 个分区):\n';
+                for (const p of dev.partitions) {
+                    text += '    #' + p.number + '  ' + p.start + ' - ' + p.end + '  ' + p.size + '  ' + (p.code||'') + '  ' + (p.name||'') + '\n';
+                }
+            }
+
+            text += '\n  SMART 健康状态:\n';
+            if (dev.smart.available) {
+                if (dev.smart.health) text += '    健康状态:   ' + dev.smart.health + '\n';
+                if (dev.smart.protocol) text += '    协议:       ' + dev.smart.protocol + '\n';
+                if (dev.smart.model) text += '    型号:       ' + dev.smart.model + '\n';
+                if (dev.smart.serial) text += '    序列号:     ' + dev.smart.serial + '\n';
+                if (dev.smart.firmware) text += '    固件版本:   ' + dev.smart.firmware + '\n';
+                if (dev.smart.capacity) text += '    容量:       ' + dev.smart.capacity + '\n';
+                if (dev.smart.temp) text += '    温度:       ' + dev.smart.temp + '\n';
+                if (dev.smart.hours) text += '    通电时长:   ' + dev.smart.hours + '\n';
+                if (dev.smart.powerCycles) text += '    通电次数:   ' + dev.smart.powerCycles + '\n';
+                if (dev.smart.nvmeAttrs && dev.smart.nvmeAttrs.length) {
+                    text += '\n    NVMe SMART/Health Information:\n';
+                    for (const a of dev.smart.nvmeAttrs) {
+                        text += '      ' + (a.key+'').padEnd(36) + a.value + '\n';
+                    }
+                }
+                if (dev.smart.attrs && dev.smart.attrs.length) {
+                    text += '\n    SMART 属性明细:\n';
+                    text += '      ID   属性名                    值   最差  阈值  原始值\n';
+                    for (const a of dev.smart.attrs) {
+                        text += '      ' + String(a.id).padStart(3) + '  ' + (a.name||'').padEnd(24) + ' ' + String(a.value).padStart(4) + '  ' + String(a.worst).padStart(4) + '  ' + String(a.thresh).padStart(4) + '  ' + a.raw + '\n';
+                    }
+                }
+                if (dev.smart.rawFull) {
+                    text += '\n    smartctl 原始输出:\n' + dev.smart.rawFull + '\n';
+                }
+            } else {
+                text += '    ' + (dev.smart.error || 'SMART 信息不可用') + '\n';
+            }
+
+            text += '\n' + '-'.repeat(60) + '\n\n';
+        }
+        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const d = new Date();
+        const fname = 'storage_report_' + d.getFullYear() + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0') + '_' + String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0') + String(d.getSeconds()).padStart(2,'0') + '.txt';
+        a.href = url;
+        a.download = fname;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    // ==================== Update Helper ====================
+    let updateFileInfo = null;
+
+    function showUpdateStatus(id, msg, type) {
+        const el = document.getElementById(id);
+        el.textContent = msg;
+        el.className = 'update-status visible ' + type;
+    }
+
+    function hideUpdateStatus(id) {
+        const el = document.getElementById(id);
+        el.className = 'update-status';
+    }
+
+    async function checkUpdate() {
+        const proxy = document.getElementById('update-proxy').value.trim();
+        const statusEl = 'update-net-status';
+        const dlBtn = document.getElementById('btn-update-download');
+        dlBtn.disabled = true;
+        showUpdateStatus(statusEl, '⏳ 正在检测更新...', 'info');
+
+        try {
+            const resp = await fetch('/api/update_check?proxy=' + encodeURIComponent(proxy));
+            const data = await resp.json();
+            if (data.hasUpdate) {
+                showUpdateStatus(statusEl, '✅ 发现新版本: ' + data.latestVersion + '（当前: v{{.BuildTime}}）\n' + (data.releaseNote || ''), 'success');
+                dlBtn.disabled = false;
+                dlBtn.dataset.downloadUrl = data.downloadUrl || '';
+            } else if (data.latestVersion) {
+                showUpdateStatus(statusEl, '✓ 当前已是最新版本: ' + data.latestVersion, 'info');
+            } else {
+                showUpdateStatus(statusEl, '⚠️ ' + (data.error || '检测更新失败，请检查网络或代理设置'), 'warning');
+            }
+        } catch (e) {
+            showUpdateStatus(statusEl, '❌ 请求失败: ' + e.message, 'error');
+        }
+    }
+
+    async function downloadUpdate() {
+        const dlBtn = document.getElementById('btn-update-download');
+        const url = dlBtn.dataset.downloadUrl;
+        if (!url) { showUpdateStatus('update-net-status', '❌ 无下载地址', 'error'); return; }
+
+        dlBtn.disabled = true;
+        dlBtn.textContent = '⏳ 下载中...';
+        showUpdateStatus('update-net-status', '⏳ 正在下载更新...', 'info');
+        document.getElementById('update-progress-bar').classList.add('visible');
+        document.getElementById('update-bar-fill').style.width = '0%';
+
+        try {
+            const resp = await fetch('/api/update_download', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url })
+            });
+            const data = await resp.json();
+            if (resp.ok && !data.error) {
+                document.getElementById('update-bar-fill').style.width = '100%';
+                showUpdateStatus('update-net-status', '✅ 下载完成，正在安装...', 'success');
+                setTimeout(function() {
+                    showUpdateStatus('update-net-status', '✅ 更新安装完成，即将重启服务...', 'success');
+                }, 1000);
+            } else {
+                showUpdateStatus('update-net-status', '❌ 下载失败: ' + (data.error || '未知错误'), 'error');
+                dlBtn.disabled = false;
+            }
+        } catch (e) {
+            showUpdateStatus('update-net-status', '❌ 请求失败: ' + e.message, 'error');
+            dlBtn.disabled = false;
+        } finally {
+            dlBtn.textContent = '⬇️ 下载并安装';
+        }
+    }
+
+    function onUpdateFileSelected(input) {
+        const file = input.files[0];
+        if (!file) {
+            updateFileInfo = null;
+            document.getElementById('update-file-info').textContent = '';
+            document.getElementById('btn-update-upload').disabled = true;
+            return;
+        }
+        updateFileInfo = file;
+        const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+        document.getElementById('update-file-info').textContent = '📄 ' + file.name + ' (' + sizeMB + ' MB)';
+        document.getElementById('btn-update-upload').disabled = false;
+        hideUpdateStatus('update-upload-status');
+    }
+
+    async function uploadUpdate() {
+        if (!updateFileInfo) return;
+        const uploadBtn = document.getElementById('btn-update-upload');
+        uploadBtn.disabled = true;
+        uploadBtn.textContent = '⏳ 上传中...';
+        showUpdateStatus('update-upload-status', '⏳ 正在上传 ' + updateFileInfo.name + '...', 'info');
+
+        try {
+            const formData = new FormData();
+            formData.append('file', updateFileInfo);
+            const resp = await fetch('/api/update_upload', { method: 'POST', body: formData });
+            const data = await resp.json();
+            if (resp.ok && !data.error) {
+                showUpdateStatus('update-upload-status', '✅ 上传成功，正在安装更新...', 'success');
+                setTimeout(function() {
+                    showUpdateStatus('update-upload-status', '✅ 更新安装完成，即将重启服务...', 'success');
+                }, 1000);
+            } else {
+                showUpdateStatus('update-upload-status', '❌ 上传失败: ' + (data.error || '未知错误'), 'error');
+            }
+        } catch (e) {
+            showUpdateStatus('update-upload-status', '❌ 请求失败: ' + e.message, 'error');
+        } finally {
+            uploadBtn.disabled = false;
+            uploadBtn.textContent = '⬆️ 上传并更新';
+        }
+    }
+
+    (function() {
+        var area = document.getElementById('update-upload-area');
+        if (!area) return;
+        area.addEventListener('dragover', function(e) { e.preventDefault(); area.classList.add('dragover'); });
+        area.addEventListener('dragleave', function(e) { e.preventDefault(); area.classList.remove('dragover'); });
+        area.addEventListener('drop', function(e) {
+            e.preventDefault();
+            area.classList.remove('dragover');
+            var input = document.getElementById('update-file-input');
+            if (e.dataTransfer.files.length) {
+                input.files = e.dataTransfer.files;
+                onUpdateFileSelected(input);
+            }
+        });
+    })();
 
     // ==================== Utilities ====================
     function showProgress() { document.getElementById('progress-container').style.display = 'block'; }

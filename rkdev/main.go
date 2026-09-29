@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -464,7 +465,10 @@ func main() {
 	http.HandleFunc("/api/logs", handleLogs)
 	http.HandleFunc("/api/boot_order", handleBootOrder)
 	http.HandleFunc("/api/uboot_setenv", handleUbootSetenv)
-	http.HandleFunc("/api/reboot", handleReboot)
+ 	http.HandleFunc("/api/storage", handleStorage)
+ 	http.HandleFunc("/api/update_check", handleUpdateCheck)
+ 	http.HandleFunc("/api/update_download", handleUpdateDownload)
+ 	http.HandleFunc("/api/update_upload", handleUpdateUpload)
 
 	http.Handle("/api/terminal", websocket.Handler(handleTerminal))
 	http.Handle("/res/", http.StripPrefix("/res/", http.FileServer(http.FS(resSubFS))))
@@ -2394,5 +2398,392 @@ func formatBytes(b int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "kMGTPE"[exp])
+}
+
+// ============ Storage Detection (smartctl / sgdisk / lsblk) ============
+
+type StoragePartition struct {
+	Number int    `json:"number"`
+	Start  string `json:"start"`
+	End    string `json:"end"`
+	Size   string `json:"size"`
+	Code   string `json:"code"`
+	Name   string `json:"name"`
+	Type   string `json:"type"`
+}
+
+type StorageSmart struct {
+	Available bool              `json:"available"`
+	Model     string            `json:"model"`
+	Serial    string            `json:"serial"`
+	Firmware  string            `json:"firmware"`
+	Capacity  string            `json:"capacity"`
+	Temp      string            `json:"temp"`
+	Hours     string            `json:"hours"`
+	PowerCycles string          `json:"powerCycles"`
+	Health    string            `json:"health"`
+	Protocol  string            `json:"protocol"`
+	Attrs     []SmartAttr       `json:"attrs"`
+	NvmeAttrs []NvmeSmartAttr   `json:"nvmeAttrs"`
+	RawFull   string            `json:"rawFull"`
+	Error     string            `json:"error,omitempty"`
+}
+
+type SmartAttr struct {
+	ID    int    `json:"id"`
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	Worst string `json:"worst"`
+	Thresh string `json:"thresh"`
+	Raw   string `json:"raw"`
+}
+
+type NvmeSmartAttr struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+type StorageDevice struct {
+	Device     string             `json:"device"`
+	Model      string             `json:"model"`
+	Size       string             `json:"size"`
+	Type       string             `json:"type"`
+	Transport  string             `json:"transport"`
+	Partitions []StoragePartition `json:"partitions"`
+	Smart      StorageSmart       `json:"smart"`
+}
+
+type StorageResponse struct {
+	Devices []StorageDevice `json:"devices"`
+	Error   string          `json:"error,omitempty"`
+}
+
+func handleStorage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErr(w, http.StatusMethodNotAllowed, "仅支持 GET")
+		return
+	}
+
+	devices, err := detectStorageDevices()
+	resp := StorageResponse{Devices: devices}
+	if err != nil {
+		resp.Error = err.Error()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func detectStorageDevices() ([]StorageDevice, error) {
+	var devices []StorageDevice
+
+	out, err := exec.Command("lsblk", "-b", "-d", "-n", "-o", "NAME,SIZE,MODEL,ROTA,TRAN").Output()
+	if err != nil {
+		return nil, fmt.Errorf("lsblk 执行失败: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		name := fields[0]
+		if strings.HasPrefix(name, "sr") || strings.HasPrefix(name, "loop") || strings.HasPrefix(name, "zram") {
+			continue
+		}
+
+		sizeBytes, _ := strconv.ParseInt(fields[1], 10, 64)
+		rota := fields[2]
+		transport := ""
+		if len(fields) >= 5 {
+			transport = fields[4]
+		}
+		model := ""
+		if len(fields) >= 4 {
+			model = strings.Join(fields[3:len(fields)-1], " ")
+			if len(fields) >= 5 {
+				model = strings.Join(fields[3:], " ")
+			}
+		}
+
+		devType := "HDD"
+		if rota == "0" {
+			devType = "SSD"
+		}
+		if transport == "usb" {
+			devType = "USB"
+		}
+
+		device := "/dev/" + name
+		dev := StorageDevice{
+			Device:    device,
+			Model:     model,
+			Size:      formatBytes(sizeBytes),
+			Type:      devType,
+			Transport: transport,
+		}
+
+		dev.Partitions = getPartitions(device)
+		dev.Smart = getSmartInfo(device)
+
+		devices = append(devices, dev)
+	}
+
+	if len(devices) == 0 {
+		return nil, fmt.Errorf("未检测到存储设备")
+	}
+	return devices, nil
+}
+
+func getPartitions(device string) []StoragePartition {
+	out, err := exec.Command("sgdisk", "-p", device).Output()
+	if err != nil {
+		out2, err2 := exec.Command("fdisk", "-l", device).Output()
+		if err2 != nil {
+			return nil
+		}
+		return parseFdiskOutput(string(out2))
+	}
+	return parseSgdiskOutput(string(out))
+}
+
+func parseSgdiskOutput(output string) []StoragePartition {
+	var parts []StoragePartition
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "Disk") || strings.HasPrefix(line, "Number") || strings.Contains(line, "invalid") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 6 {
+			continue
+		}
+		num, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
+		code := ""
+		name := ""
+		ptype := ""
+		for i, f := range fields {
+			if f == "code" && i+1 < len(fields) {
+				code = fields[i+1]
+			}
+			if f == "name" && i+1 < len(fields) {
+				name = fields[i+1]
+			}
+			if f == "type" && i+1 < len(fields) {
+				ptype = fields[i+1]
+			}
+		}
+		if code == "" && len(fields) >= 7 {
+			code = fields[5]
+		}
+		if name == "" && len(fields) >= 8 {
+			name = fields[6]
+		}
+		parts = append(parts, StoragePartition{
+			Number: num,
+			Start:  fields[1],
+			End:    fields[2],
+			Size:   fields[3] + " " + fields[4],
+			Code:   code,
+			Name:   name,
+			Type:   ptype,
+		})
+	}
+	return parts
+}
+
+func parseFdiskOutput(output string) []StoragePartition {
+	var parts []StoragePartition
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "/dev/") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		numStr := fields[0]
+		re := regexp.MustCompile(`\D`)
+		numStr = re.ReplaceAllString(numStr, "")
+		num, err := strconv.Atoi(numStr)
+		if err != nil {
+			num = len(parts) + 1
+		}
+		parts = append(parts, StoragePartition{
+			Number: num,
+			Start:  fields[1],
+			End:    fields[2],
+			Size:   fields[3] + " sectors",
+			Code:   "",
+			Name:   "",
+			Type:   fields[4],
+		})
+	}
+	return parts
+}
+
+func getSmartInfo(device string) StorageSmart {
+	info := StorageSmart{Available: false}
+
+	out, err := exec.Command("smartctl", "-a", device).CombinedOutput()
+	text := string(out)
+	info.RawFull = text
+
+	if err != nil {
+		if len(out) > 0 {
+			info.Available = true
+		}
+		info.Error = fmt.Sprintf("smartctl 退出码非零: %v", err)
+	} else {
+		info.Available = true
+	}
+
+	if !info.Available {
+		return info
+	}
+
+	info.Protocol = "SATA"
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Model Family:") || strings.HasPrefix(line, "Device Model:") || strings.HasPrefix(line, "Model Number:") {
+			info.Model = strings.TrimSpace(strings.SplitN(line, ":", 2)[1])
+		}
+		if strings.HasPrefix(line, "Serial Number:") {
+			info.Serial = strings.TrimSpace(strings.SplitN(line, ":", 2)[1])
+		}
+		if strings.HasPrefix(line, "Firmware Version:") {
+			info.Firmware = strings.TrimSpace(strings.SplitN(line, ":", 2)[1])
+		}
+		if strings.HasPrefix(line, "User Capacity:") {
+			cap := strings.TrimSpace(strings.SplitN(line, ":", 2)[1])
+			if idx := strings.Index(cap, "["); idx >= 0 {
+				cap = strings.TrimSpace(cap[:idx]) + " " + strings.TrimSpace(cap[idx:])
+			}
+			info.Capacity = cap
+		}
+		if strings.HasPrefix(line, "NVMe Version:") {
+			info.Protocol = "NVMe"
+		}
+		if strings.HasPrefix(line, "Temperature:") {
+			info.Temp = strings.TrimSpace(strings.SplitN(line, ":", 2)[1])
+		}
+		if strings.HasPrefix(line, "Power On Hours:") {
+			info.Hours = strings.TrimSpace(strings.SplitN(line, ":", 2)[1])
+		}
+		if strings.HasPrefix(line, "Power Cycles:") {
+			info.PowerCycles = strings.TrimSpace(strings.SplitN(line, ":", 2)[1])
+		}
+		if strings.HasPrefix(line, "Power_On_Hours") {
+			parts := strings.Fields(line)
+			if len(parts) >= 10 {
+				info.Hours = parts[9]
+			}
+		}
+		if strings.HasPrefix(line, "Power_Cycle_Count") {
+			parts := strings.Fields(line)
+			if len(parts) >= 10 {
+				info.PowerCycles = parts[9]
+			}
+		}
+		if strings.HasPrefix(line, "SMART overall-health") || strings.HasPrefix(line, "SMART Health Status") {
+			if strings.Contains(line, "PASSED") || strings.Contains(line, "OK") {
+				info.Health = "PASSED"
+			} else if strings.Contains(line, "FAILED") {
+				info.Health = "FAILED"
+			} else if idx := strings.Index(line, ":"); idx >= 0 {
+				info.Health = strings.TrimSpace(line[idx+1:])
+			}
+		}
+	}
+
+	if info.Protocol == "NVMe" {
+		info.NvmeAttrs = parseNvmeSmart(text)
+	} else {
+		info.Attrs = parseSmartAttrs(text)
+	}
+	return info
+}
+
+func parseNvmeSmart(text string) []NvmeSmartAttr {
+	var attrs []NvmeSmartAttr
+	inSection := false
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "SMART/Health Information") {
+			inSection = true
+			continue
+		}
+		if inSection {
+			if trimmed == "" {
+				if len(attrs) > 0 {
+					break
+				}
+				continue
+			}
+			if strings.HasPrefix(trimmed, "Error Information") || strings.HasPrefix(trimmed, "Self-test Log") || strings.HasPrefix(trimmed, "Supported Power") || strings.HasPrefix(trimmed, "Supported LBA") {
+				break
+			}
+			idx := strings.Index(trimmed, ":")
+			if idx < 0 {
+				continue
+			}
+			key := strings.TrimSpace(trimmed[:idx])
+			val := strings.TrimSpace(trimmed[idx+1:])
+			if key == "" || val == "" {
+				continue
+			}
+			if strings.Contains(key, "Comp. Temp. Threshold") && val == "" {
+				continue
+			}
+			attrs = append(attrs, NvmeSmartAttr{Key: key, Value: val})
+		}
+	}
+	return attrs
+}
+
+func parseSmartAttrs(text string) []SmartAttr {
+	var attrs []SmartAttr
+	inAttrs := false
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "ID# ATTRIBUTE_NAME") {
+			inAttrs = true
+			continue
+		}
+		if inAttrs {
+			if line == "" {
+				if len(attrs) > 0 {
+					break
+				}
+				continue
+			}
+			r := regexp.MustCompile(`^\d`)
+			if !r.MatchString(line) {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) < 10 {
+				continue
+			}
+			id, err := strconv.Atoi(fields[0])
+			if err != nil {
+				continue
+			}
+			attrs = append(attrs, SmartAttr{
+				ID:    id,
+				Name:  fields[1],
+				Value: fields[2],
+				Worst: fields[3],
+				Thresh: fields[4],
+				Raw:   strings.Join(fields[9:], " "),
+			})
+		}
+	}
+	return attrs
 }
 
