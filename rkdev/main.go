@@ -480,6 +480,10 @@ func main() {
 	http.HandleFunc("/api/backup/progress", handleBackupProgress)
 	http.HandleFunc("/api/backup/cancel", handleBackupCancel)
 	http.HandleFunc("/api/restore/stream", handleRestoreStream)
+	http.HandleFunc("/api/firewall/status", handleFirewallStatus)
+	http.HandleFunc("/api/firewall/apply", handleFirewallApply)
+	http.HandleFunc("/api/firewall/delete", handleFirewallDelete)
+	http.HandleFunc("/api/firewall/toggle", handleFirewallToggle)
 
 	http.Handle("/api/terminal", websocket.Handler(handleTerminal))
 	http.Handle("/res/", http.StripPrefix("/res/", http.FileServer(http.FS(resSubFS))))
@@ -4252,5 +4256,355 @@ func handleRestoreStream(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 		"message": "还原完成，重启设备后生效",
 	})
+}
+
+const fwChainInput = "RKDEV_INPUT"
+const fwChainForward = "RKDEV_FORWARD"
+const fwChainNat = "RKDEV_NAT"
+
+type FwRule struct {
+	ID        int    `json:"id"`
+	Chain     string `json:"chain"`
+	Action    string `json:"action"`
+	Protocol  string `json:"protocol"`
+	SrcIP     string `json:"srcIP"`
+	SrcPort   string `json:"srcPort"`
+	DstIP     string `json:"dstIP"`
+	DstPort   string `json:"dstPort"`
+	IFace     string `json:"iface"`
+	NatTarget string `json:"natTarget"`
+	Comment   string `json:"comment"`
+	Raw       string `json:"raw"`
+}
+
+type FwStatus struct {
+	Enabled    bool      `json:"enabled"`
+	InputPolicy string   `json:"inputPolicy"`
+	ForwardPolicy string  `json:"forwardPolicy"`
+	InputRules []FwRule  `json:"inputRules"`
+	ForwardRules []FwRule `json:"forwardRules"`
+	NatRules   []FwRule  `json:"natRules"`
+	Error      string    `json:"error,omitempty"`
+}
+
+func runIptables(args ...string) (string, error) {
+	fullArgs := append([]string{}, args...)
+	out, err := exec.Command("iptables", fullArgs...).CombinedOutput()
+	return string(out), err
+}
+
+func runIptablesT(table string, args ...string) (string, error) {
+	fullArgs := append([]string{"-t", table}, args...)
+	out, err := exec.Command("iptables", fullArgs...).CombinedOutput()
+	return string(out), err
+}
+
+func ensureFwChains() {
+	runIptables("-N", fwChainInput, "2>/dev/null")
+	runIptables("-N", fwChainForward, "2>/dev/null")
+	runIptables("-t", "nat", "-N", fwChainNat, "2>/dev/null")
+
+	out, _ := exec.Command("iptables", "-C", "INPUT", "-j", fwChainInput).CombinedOutput()
+	if len(out) > 0 {
+		runIptables("-I", "INPUT", "1", "-j", fwChainInput)
+	}
+	out, _ = exec.Command("iptables", "-C", "FORWARD", "-j", fwChainForward).CombinedOutput()
+	if len(out) > 0 {
+		runIptables("-I", "FORWARD", "1", "-j", fwChainForward)
+	}
+	out, _ = exec.Command("iptables", "-t", "nat", "-C", "PREROUTING", "-j", fwChainNat).CombinedOutput()
+	if len(out) > 0 {
+		runIptables("-t", "nat", "-I", "PREROUTING", "1", "-j", fwChainNat)
+	}
+}
+
+func handleFirewallStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	ensureFwChains()
+
+	status := FwStatus{}
+
+	out, err := exec.Command("iptables", "-S", "INPUT").Output()
+	if err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.Contains(line, "policy DROP") || strings.Contains(line, "-P INPUT DROP") {
+				status.InputPolicy = "DROP"
+			} else if strings.Contains(line, "policy ACCEPT") || strings.Contains(line, "-P INPUT ACCEPT") {
+				status.InputPolicy = "ACCEPT"
+			}
+		}
+	}
+
+	out, err = exec.Command("iptables", "-S", "FORWARD").Output()
+	if err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.Contains(line, "policy DROP") || strings.Contains(line, "-P FORWARD DROP") {
+				status.ForwardPolicy = "DROP"
+			} else if strings.Contains(line, "policy ACCEPT") || strings.Contains(line, "-P FORWARD ACCEPT") {
+				status.ForwardPolicy = "ACCEPT"
+			}
+		}
+	}
+
+	_, _, inputRules := parseFwChain(fwChainInput, false)
+	_, _, forwardRules := parseFwChain(fwChainForward, false)
+	_, _, natRules := parseFwChain(fwChainNat, true)
+
+	status.InputRules = inputRules
+	status.ForwardRules = forwardRules
+	status.NatRules = natRules
+	status.Enabled = len(inputRules) > 0 || len(forwardRules) > 0 || len(natRules) > 0
+
+	json.NewEncoder(w).Encode(status)
+}
+
+func parseFwChain(chain string, nat bool) (string, error, []FwRule) {
+	var rules []FwRule
+	var tableArg string
+	if nat {
+		tableArg = "-t nat"
+	}
+
+	out, err := exec.Command("sh", "-c", "iptables "+tableArg+" -L "+chain+" -n --line-numbers 2>/dev/null").Output()
+	if err != nil {
+		return "", err, nil
+	}
+
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "Chain") || strings.HasPrefix(line, "num") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		id, _ := strconv.Atoi(fields[0])
+		rule := FwRule{ID: id, Raw: line}
+
+		if len(fields) > 1 {
+			rule.Action = fields[1]
+		}
+		for i := 2; i < len(fields); i++ {
+			if fields[i] == "tcp" || fields[i] == "udp" || fields[i] == "icmp" || fields[i] == "all" {
+				rule.Protocol = fields[i]
+			}
+			if fields[i] == "anywhere" || strings.Contains(fields[i], ".") {
+				if rule.SrcIP == "" {
+					rule.SrcIP = fields[i]
+				} else if rule.DstIP == "" {
+					rule.DstIP = fields[i]
+				}
+			}
+			if strings.Contains(fields[i], "dpt:") {
+				rule.DstPort = strings.TrimPrefix(fields[i], "dpt:")
+			}
+			if strings.Contains(fields[i], "spt:") {
+				rule.SrcPort = strings.TrimPrefix(fields[i], "spt:")
+			}
+			if strings.Contains(fields[i], "to:") {
+				rule.NatTarget = strings.TrimPrefix(fields[i], "to:")
+			}
+		}
+
+		if nat {
+			rule.Chain = "nat"
+		} else if chain == fwChainInput {
+			rule.Chain = "input"
+		} else {
+			rule.Chain = "forward"
+		}
+		rules = append(rules, rule)
+	}
+	return "", nil, rules
+}
+
+func handleFirewallApply(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		jsonErr(w, http.StatusMethodNotAllowed, "仅支持 POST")
+		return
+	}
+
+	var req struct {
+		Chain    string `json:"chain"`
+		Action   string `json:"action"`
+		Protocol string `json:"protocol"`
+		SrcIP    string `json:"srcIP"`
+		DstIP    string `json:"dstIP"`
+		DstPort  string `json:"dstPort"`
+		NatTarget string `json:"natTarget"`
+		Comment  string `json:"comment"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "参数解析失败: " + err.Error()})
+		return
+	}
+
+	ensureFwChains()
+
+	var args []string
+	var table string
+	var chain string
+
+	if req.Chain == "nat" {
+		table = "nat"
+		chain = fwChainNat
+		if req.Action == "dnat" {
+			args = []string{"-t", "nat", "-A", chain, "-p", req.Protocol}
+			if req.DstPort != "" {
+				args = append(args, "--dport", req.DstPort)
+			}
+			args = append(args, "-j", "DNAT", "--to-destination", req.NatTarget)
+		} else if req.Action == "snat" {
+			args = append(args, "-j", "SNAT", "--to-source", req.NatTarget)
+		} else if req.Action == "masquerade" {
+			args = []string{"-t", "nat", "-A", chain, "-j", "MASQUERADE"}
+		}
+	} else {
+		if req.Chain == "input" {
+			chain = fwChainInput
+		} else {
+			chain = fwChainForward
+		}
+		args = []string{"-A", chain, "-j", req.Action}
+		if req.Protocol != "" && req.Protocol != "all" {
+			args = []string{"-A", chain, "-p", req.Protocol, "-j", req.Action}
+		}
+		if req.SrcIP != "" {
+			args = append(args, "-s", req.SrcIP)
+		}
+		if req.DstIP != "" {
+			args = append(args, "-d", req.DstIP)
+		}
+		if req.DstPort != "" {
+			args = append(args, "--dport", req.DstPort)
+		}
+	}
+
+	if req.Comment != "" {
+		args = append(args, "-m", "comment", "--comment", req.Comment)
+	}
+
+	if table == "nat" {
+		out, err := exec.Command("iptables", args...).CombinedOutput()
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{"error": "添加规则失败: " + string(out)})
+			return
+		}
+	} else {
+		out, err := exec.Command("iptables", args...).CombinedOutput()
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{"error": "添加规则失败: " + string(out)})
+			return
+		}
+	}
+
+	advLog("info", "防火墙添加规则: %s %v", chain, args)
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+func handleFirewallDelete(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		jsonErr(w, http.StatusMethodNotAllowed, "仅支持 POST")
+		return
+	}
+
+	var req struct {
+		Chain string `json:"chain"`
+		ID    int    `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "参数解析失败: " + err.Error()})
+		return
+	}
+
+	var chain string
+	var table string
+	if req.Chain == "input" {
+		chain = fwChainInput
+	} else if req.Chain == "forward" {
+		chain = fwChainForward
+	} else if req.Chain == "nat" {
+		chain = fwChainNat
+		table = "nat"
+	} else {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "未知链"})
+		return
+	}
+
+	var out string
+	var err error
+	if table == "nat" {
+		out, err = runIptablesT("nat", "-D", chain, strconv.Itoa(req.ID))
+	} else {
+		out, err = runIptables("-D", chain, strconv.Itoa(req.ID))
+	}
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "删除规则失败: " + out})
+		return
+	}
+
+	advLog("info", "防火墙删除规则: %s #%d", chain, req.ID)
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+func handleFirewallToggle(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		jsonErr(w, http.StatusMethodNotAllowed, "仅支持 POST")
+		return
+	}
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"error": "参数解析失败: " + err.Error()})
+		return
+	}
+
+	ensureFwChains()
+
+	if req.Enabled {
+		out, _ := exec.Command("iptables", "-C", "INPUT", "-j", fwChainInput).CombinedOutput()
+		if len(out) > 0 {
+			runIptables("-I", "INPUT", "1", "-j", fwChainInput)
+		}
+		out, _ = exec.Command("iptables", "-C", "FORWARD", "-j", fwChainForward).CombinedOutput()
+		if len(out) > 0 {
+			runIptables("-I", "FORWARD", "1", "-j", fwChainForward)
+		}
+		out, _ = exec.Command("iptables", "-t", "nat", "-C", "PREROUTING", "-j", fwChainNat).CombinedOutput()
+		if len(out) > 0 {
+			runIptables("-t", "nat", "-I", "PREROUTING", "1", "-j", fwChainNat)
+		}
+		advLog("info", "防火墙已启用")
+	} else {
+		for {
+			out, err := exec.Command("iptables", "-D", "INPUT", "-j", fwChainInput).CombinedOutput()
+			if err != nil || len(out) == 0 {
+				break
+			}
+		}
+		for {
+			out, err := exec.Command("iptables", "-D", "FORWARD", "-j", fwChainForward).CombinedOutput()
+			if err != nil || len(out) == 0 {
+				break
+			}
+		}
+		for {
+			out, err := exec.Command("iptables", "-t", "nat", "-D", "PREROUTING", "-j", fwChainNat).CombinedOutput()
+			if err != nil || len(out) == 0 {
+				break
+			}
+		}
+		advLog("info", "防火墙已禁用")
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 }
 
