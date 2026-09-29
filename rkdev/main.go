@@ -56,6 +56,181 @@ const gptReservedSectors = 34
 // gptBackupSectors 是磁盘尾部预留给备份 GPT（备份分区表数组 32 扇区 + 备份头 1 扇区）的扇区数。
 const gptBackupSectors = 33
 
+// ============ Logging (terminal + /tmp/kdev.log) ============
+
+const (
+	logFilePath = "/tmp/kdev.log"
+	logMaxSize  = 10 * 1024 * 1024 // 日志文件上限 10MB
+)
+
+// limitedFileWriter 以追加方式写入日志文件，并保证文件大小不超过 max。
+// 当再写入一条日志会超过上限时，先清空文件再继续写入（相当于循环覆盖）。
+// Write 永远不返回错误，避免文件写入失败时连带阻断 io.MultiWriter 中的终端输出。
+type limitedFileWriter struct {
+	mu   sync.Mutex
+	path string
+	max  int64
+	f    *os.File
+	size int64
+}
+
+func newLimitedFileWriter(path string, max int64) (*limitedFileWriter, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, err
+	}
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	w := &limitedFileWriter{path: path, max: max, f: f, size: st.Size()}
+	// 上次遗留的文件如果已超限，启动时先清空
+	if w.size > w.max {
+		if err := f.Truncate(0); err != nil {
+			f.Close()
+			return nil, err
+		}
+		w.size = 0
+	}
+	return w, nil
+}
+
+func (w *limitedFileWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	total := len(p)
+	if int64(len(p)) > w.max {
+		p = p[len(p)-int(w.max):] // 单条日志本身超限时只保留尾部
+	}
+
+	if w.size+int64(len(p)) > w.max {
+		// O_APPEND 模式下 Truncate(0) 后，后续写入自动从 0 偏移开始
+		if err := w.f.Truncate(0); err != nil {
+			fmt.Fprintf(os.Stderr, "日志文件截断失败: %v\n", err)
+			return total, nil
+		}
+		w.size = 0
+	}
+
+	n, err := w.f.Write(p)
+	w.size += int64(n)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "日志文件写入失败: %v\n", err)
+	}
+	return total, nil
+}
+
+// initLogging 让所有 log 输出同时写到终端(stdout)和 /tmp/kdev.log
+func initLogging() {
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
+
+	fw, err := newLimitedFileWriter(logFilePath, logMaxSize)
+	if err != nil {
+		log.SetOutput(os.Stdout)
+		log.Printf("[LOG] 无法打开日志文件 %s，仅输出到终端: %v", logFilePath, err)
+		return
+	}
+	log.SetOutput(io.MultiWriter(os.Stdout, fw))
+	log.Printf("[LOG] 日志已启用：终端 + %s（追加写入，上限 %d MB）", logFilePath, logMaxSize/1024/1024)
+}
+
+// logRequests 记录 HTTP 请求（跳过高频的进度轮询和静态资源，避免刷屏）。
+// 注意：不包装 ResponseWriter，因此不影响 SSE(Flusher) 与 WebSocket(Hijacker)。
+func logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		if p != "/api/progress" && p != "/api/upload_status" && !strings.HasPrefix(p, "/res/") {
+			log.Printf("[HTTP] %s %s from %s", r.Method, p, r.RemoteAddr)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// ============ Upload Progress ============
+
+// uploadState 记录当前这次上传的实时状态，供前端通过 /api/upload_status 轮询。
+// Received 统计的是从网络实际收到的请求体字节数（含 multipart 头，略大于文件本身），
+// Total 为请求 Content-Length，因此进度百分比是近似值。
+// Stage: uploading=接收并写入磁盘；streaming=边接收边解压(tar.gz/tar.bz2)；extracting=接收完毕后解压(zip/rar)
+type uploadState struct {
+	Active   bool    `json:"active"`
+	Stage    string  `json:"stage"`
+	Name     string  `json:"name"`
+	Total    int64   `json:"total"`
+	Received int64   `json:"received"`
+	Progress float64 `json:"progress"`
+	Speed    float64 `json:"speed"` // 字节/秒
+}
+
+var (
+	upMu    sync.Mutex
+	upState uploadState
+	upStart time.Time
+)
+
+func upBegin(total int64) {
+	upMu.Lock()
+	upState = uploadState{Active: true, Stage: "uploading", Total: total}
+	upStart = time.Now()
+	upMu.Unlock()
+}
+
+func upSet(name, stage string) {
+	upMu.Lock()
+	upState.Name = name
+	upState.Stage = stage
+	upMu.Unlock()
+}
+
+func upSetStage(stage string) {
+	upMu.Lock()
+	upState.Stage = stage
+	upMu.Unlock()
+}
+
+func upEnd() {
+	upMu.Lock()
+	upState.Active = false
+	st, el := upState, time.Since(upStart).Seconds()
+	upMu.Unlock()
+	if el > 0 {
+		log.Printf("[UPLOAD] 传输结束: %s 共收到 %d bytes，用时 %.1fs，平均 %.2f MB/s",
+			st.Name, st.Received, el, float64(st.Received)/el/1024/1024)
+	}
+}
+
+// countingBody 包装请求体，统计实际收到的字节数（不改变读取行为）
+type countingBody struct{ io.ReadCloser }
+
+func (c *countingBody) Read(p []byte) (int, error) {
+	n, err := c.ReadCloser.Read(p)
+	if n > 0 {
+		upMu.Lock()
+		upState.Received += int64(n)
+		if el := time.Since(upStart).Seconds(); el > 0 {
+			upState.Speed = float64(upState.Received) / el
+		}
+		if upState.Total > 0 {
+			upState.Progress = float64(upState.Received) / float64(upState.Total) * 100
+			if upState.Progress > 100 {
+				upState.Progress = 100
+			}
+		}
+		upMu.Unlock()
+	}
+	return n, err
+}
+
+func handleUploadStatus(w http.ResponseWriter, r *http.Request) {
+	upMu.Lock()
+	st := upState
+	upMu.Unlock()
+	w.Header().Set("Cache-Control", "no-store")
+	jsonOK(w, st)
+}
+
 // ============ JSON Helpers ============
 
 func jsonOK(w http.ResponseWriter, data interface{}) {
@@ -91,7 +266,6 @@ type FlashTask struct {
 	Items        []FlashWriteItem `json:"-"`
 	Partitions   []ParamPartition `json:"-"` // 仅 Mode=="multi" 时有效，用于刷写前重建 GPT 分区表
 	TargetDev    string           `json:"-"`
-	CleanupPaths []string         `json:"-"`
 }
 
 var (
@@ -149,6 +323,8 @@ type LsblkDevice struct {
 // ============ Main ============
 
 func main() {
+	initLogging()
+
 	tmpl := template.Must(template.New("index").Parse(indexHTML))
 
 	resSubFS, err := fs.Sub(resFS, "res")
@@ -162,21 +338,24 @@ func main() {
 	})
 	http.HandleFunc("/upload", handleUpload)
 	http.HandleFunc("/api/progress", handleProgress)
+	http.HandleFunc("/api/upload_status", handleUploadStatus)
 	http.HandleFunc("/api/reboot", handleReboot)
 
 	http.Handle("/api/terminal", websocket.Handler(handleTerminal))
 	http.Handle("/res/", http.StripPrefix("/res/", http.FileServer(http.FS(resSubFS))))
 
-	fmt.Println("========================================")
-	fmt.Println("  RKdev + Terminal port:80 protocol:http")
-	fmt.Println("========================================")
-	log.Fatal(http.ListenAndServe(":80", nil))
+	// 启动横幅使用 log，这样也会写入日志文件
+	log.Println("========================================")
+	log.Println("  RKdev + Terminal port:80 protocol:http")
+	log.Println("========================================")
+	log.Fatal(http.ListenAndServe(":80", logRequests(http.DefaultServeMux)))
 }
 
 // ============ Terminal (PTY over WebSocket) ============
 
 func handleTerminal(ws *websocket.Conn) {
 	defer ws.Close()
+	log.Printf("[TERM] Session started from %s", ws.Request().RemoteAddr)
 
 	shell := os.Getenv("SHELL")
 	if shell == "" {
@@ -314,6 +493,10 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusMethodNotAllowed, "仅支持 POST")
 		return
 	}
+	log.Printf("[UPLOAD] 收到上传请求 from %s", r.RemoteAddr)
+	upBegin(r.ContentLength)
+	defer upEnd()
+	r.Body = &countingBody{ReadCloser: r.Body}
 
 	// 每次上传前先清空 uploadDir，保证不会残留上一次上传的文件/解压产物，
 	// 然后重新创建 uploadDir 及其下的 unpack 子目录。
@@ -361,6 +544,11 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 			}
 			lowerName := strings.ToLower(safeName)
 			kind = detectArchiveKind(lowerName)
+			stage := "uploading"
+			if kind == archiveTarGz || kind == archiveTarBz2 {
+				stage = "streaming"
+			}
+			upSet(safeName, stage)
 
 			// ==== 情况1: tar.gz / tgz — 流式解压，不落盘压缩包 ====
 			if kind == archiveTarGz {
@@ -517,6 +705,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	var msg string
 
 	if kind == archiveZip || kind == archiveRar {
+		upSetStage("extracting")
 		extractDir := filepath.Join(unpackDir, fmt.Sprintf("pkg_%d", time.Now().UnixNano()))
 		if err := os.MkdirAll(extractDir, 0755); err != nil {
 			os.Remove(archivePath)
@@ -530,7 +719,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		} else {
 			files, err = extractRar(archivePath, extractDir)
 		}
-		os.Remove(archivePath) // 压缩包解压完即删除
+		// 压缩包解压后保留，下一次上传时随 uploadDir 一并清空
 		if err != nil {
 			os.RemoveAll(extractDir)
 			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("解压 %s 固件包失败: %v", kind, err))
@@ -549,7 +738,6 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 		task = newTask(target, written)
 		task.Mode = "single"
 		task.Items = []FlashWriteItem{{Name: innerName, Offset: 0, Size: written, Path: tmpPath}}
-		task.CleanupPaths = []string{tmpPath}
 
 		msg = fmt.Sprintf("文件 %s (%d MB) 已暂存，正在刷写到 %s ...", safeName, written/1024/1024, target)
 		if isGzip {
@@ -766,7 +954,6 @@ func buildSingleFileTask(filePath, extractDir, target string) (*FlashTask, strin
 		Name: filepath.Base(filePath), Offset: 0,
 		Size: st.Size(), Path: filePath,
 	}}
-	task.CleanupPaths = []string{extractDir}
 
 	msg := fmt.Sprintf("固件包内只有单一文件 %s (%d MB)，将整盘写入 %s ...",
 		filepath.Base(filePath), st.Size()/1024/1024, target)
@@ -879,7 +1066,6 @@ func buildMultiFileTask(files []string, extractDir, target string) (*FlashTask, 
 	// 保存完整分区表（而非仅匹配到镜像的部分），用于刷写前按磁盘实际容量重建 GPT 分区表，
 	// 这样即使某些分区本次没有对应镜像文件，也能在分区表中正确保留位置。
 	task.Partitions = partitions
-	task.CleanupPaths = []string{extractDir}
 
 	msg := fmt.Sprintf("固件包解析完成（%s + parameter.txt），%d 个分区匹配到镜像（%d 个分区未匹配，已跳过），共 %d MB，将重建 GPT 分区表后写入 %s ...",
 		sourceDesc, len(items), len(skipped), totalSize/1024/1024, target)
@@ -930,7 +1116,13 @@ func findConfigCfg(files []string) string {
 
 // doFlash 执行刷写
 func doFlash(task *FlashTask) {
-	defer cleanupTask(task)
+	// 刷机结束后不删除上传/解压文件，仅在下一次上传开始时统一清空 uploadDir
+	// 统一记录失败日志（错误原本只写入 task 状态，日志里看不到）
+	defer func() {
+		if t := getTask(task.ID); t != nil && t.Status == "error" {
+			log.Printf("[%s] ❌ Flash failed: %s", task.ID, t.Error)
+		}
+	}()
 
 	log.Printf("[%s] Flash start: mode=%s, %d item(s) -> %s (%d bytes)",
 		task.ID, task.Mode, len(task.Items), task.TargetDev, task.Total)
@@ -1036,12 +1228,6 @@ func doFlash(task *FlashTask) {
 	})
 	log.Printf("[%s] ✅ Done: %d bytes, %.1fs, %.1f MB/s",
 		task.ID, totalWritten, elapsed, float64(totalWritten)/elapsed/1024/1024)
-}
-
-func cleanupTask(task *FlashTask) {
-	for _, p := range task.CleanupPaths {
-		os.RemoveAll(p)
-	}
 }
 
 // ============ GPT Partition Table Rebuild (sgdisk) ============
@@ -1728,3 +1914,4 @@ func formatBytes(b int64) string {
 	}
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "kMGTPE"[exp])
 }
+
