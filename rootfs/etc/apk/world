@@ -13,7 +13,6 @@ ethtool
 gcompat
 htop
 iperf3
-lvm2
 musl-utils
 openrc
 openssh-client

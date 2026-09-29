@@ -16,10 +16,12 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -469,6 +471,7 @@ func main() {
  	http.HandleFunc("/api/storage", handleStorage)
  	http.HandleFunc("/api/update_check", handleUpdateCheck)
  	http.HandleFunc("/api/update_download", handleUpdateDownload)
+	http.HandleFunc("/api/update_cancel", handleUpdateCancel)
  	http.HandleFunc("/api/update_upload", handleUpdateUpload)
 
 	http.Handle("/api/terminal", websocket.Handler(handleTerminal))
@@ -2801,6 +2804,7 @@ type GithubAsset struct {
 	Size               int64  `json:"size"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 	UpdatedAt          string `json:"updated_at"`
+	Timestamp          string `json:"timestamp,omitempty"`
 }
 
 type GithubRelease struct {
@@ -2815,32 +2819,61 @@ func handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 
 	proxy := r.URL.Query().Get("proxy")
 
-	asset, version, err := findLatestSpiImage(githubReleaseAPI, proxy)
+	asset, version, allAssets, _, err := findLatestSpiImage(githubReleaseAPI, proxy)
 	if err != nil {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"hasUpdate":      false,
 			"latestVersion":  "",
 			"currentVersion": buildTime,
 			"downloadUrl":    "",
-			"releaseNote":    "",
+			"allAssets":      []interface{}{},
+			"versionCount":   0,
 			"error":          err.Error(),
 		})
 		return
 	}
 
-	hasUpdate := version != "" && version != buildTime
+	// build version list with download URLs
+	type versionItem struct {
+		Version     string `json:"version"`
+		DownloadUrl string `json:"downloadUrl"`
+		Size        int64  `json:"size"`
+	}
+	var versionList []versionItem
+	for _, a := range allAssets {
+		versionList = append(versionList, versionItem{
+			Version:     a.Timestamp,
+			DownloadUrl: a.BrowserDownloadURL,
+			Size:        a.Size,
+		})
+	}
+
+	// build version strings for backward compat
+	var allVersions []string
+	for _, a := range allAssets {
+		allVersions = append(allVersions, a.Timestamp)
+	}
+
+	// buildTime format: "2026.09.29", version format: "20260927"
+	currentNorm := strings.ReplaceAll(buildTime, ".", "")
+	currentInt, _ := strconv.ParseInt(currentNorm, 10, 64)
+	versionInt, _ := strconv.ParseInt(version, 10, 64)
+	hasUpdate := version != "" && versionInt > currentInt
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"hasUpdate":      hasUpdate,
 		"latestVersion":  version,
 		"currentVersion": buildTime,
 		"downloadUrl":    asset.BrowserDownloadURL,
 		"downloadSize":   asset.Size,
-		"releaseNote":    "",
+		"allVersions":    allVersions,
+		"allAssets":      versionList,
+		"versionCount":   len(allAssets),
 		"error":          "",
 	})
 }
 
-func findLatestSpiImage(apiURL, proxy string) (*GithubAsset, string, error) {
+func findLatestSpiImage(apiURL, proxy string) (*GithubAsset, string, []GithubAsset, []string, error) {
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
@@ -2848,7 +2881,7 @@ func findLatestSpiImage(apiURL, proxy string) (*GithubAsset, string, error) {
 
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
-		return nil, "", fmt.Errorf("创建请求失败: %v", err)
+		return nil, "", nil, nil, fmt.Errorf("创建请求失败: %v", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "rkdev-update-checker")
@@ -2859,34 +2892,35 @@ func findLatestSpiImage(apiURL, proxy string) (*GithubAsset, string, error) {
 			proxiedURL := proxy + apiURL
 			req2, err2 := http.NewRequest("GET", proxiedURL, nil)
 			if err2 != nil {
-				return nil, "", fmt.Errorf("代理请求创建失败: %v", err2)
+				return nil, "", nil, nil, fmt.Errorf("代理请求创建失败: %v", err2)
 			}
 			req2.Header.Set("Accept", "application/vnd.github+json")
 			req2.Header.Set("User-Agent", "rkdev-update-checker")
 			resp, err = client.Do(req2)
 		}
 		if err != nil {
-			return nil, "", fmt.Errorf("请求 GitHub API 失败: %v", err)
+			return nil, "", nil, nil, fmt.Errorf("请求 GitHub API 失败: %v", err)
 		}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, "", fmt.Errorf("GitHub API 返回状态码: %d", resp.StatusCode)
+		return nil, "", nil, nil, fmt.Errorf("GitHub API 返回状态码: %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, "", fmt.Errorf("读取响应失败: %v", err)
+		return nil, "", nil, nil, fmt.Errorf("读取响应失败: %v", err)
 	}
 
 	var release GithubRelease
 	if err := json.Unmarshal(body, &release); err != nil {
-		return nil, "", fmt.Errorf("解析 JSON 失败: %v", err)
+		return nil, "", nil, nil, fmt.Errorf("解析 JSON 失败: %v", err)
 	}
 
 	var bestAsset *GithubAsset
 	var bestTimestamp string
+	var allAssets []GithubAsset
 
 	for i := range release.Assets {
 		asset := &release.Assets[i]
@@ -2905,6 +2939,9 @@ func findLatestSpiImage(apiURL, proxy string) (*GithubAsset, string, error) {
 			continue
 		}
 
+		asset.Timestamp = timestamp
+		allAssets = append(allAssets, *asset)
+
 		if bestTimestamp == "" || timestamp > bestTimestamp {
 			bestTimestamp = timestamp
 			bestAsset = asset
@@ -2912,11 +2949,21 @@ func findLatestSpiImage(apiURL, proxy string) (*GithubAsset, string, error) {
 	}
 
 	if bestAsset == nil {
-		return nil, "", fmt.Errorf("未找到 spi_full_disk_*.img 镜像文件")
+		return nil, "", nil, nil, fmt.Errorf("未找到 spi_full_disk_*.img 镜像文件")
+	}
+
+	// sort allAssets by timestamp descending
+	sort.Slice(allAssets, func(i, j int) bool {
+		return allAssets[i].Timestamp > allAssets[j].Timestamp
+	})
+
+	var allVersions []string
+	for _, a := range allAssets {
+		allVersions = append(allVersions, a.Timestamp)
 	}
 
 	version := bestTimestamp
-	return bestAsset, version, nil
+	return bestAsset, version, allAssets, allVersions, nil
 }
 
 func isAllDigits(s string) bool {
@@ -2943,6 +2990,7 @@ type UpdateProgress struct {
 	Success  bool    `json:"success"`
 	Message  string  `json:"message"`
 	Running  bool    `json:"running"`
+	cancelCh chan struct{}
 }
 
 var updateProgress UpdateProgress
@@ -2961,6 +3009,7 @@ func startUpdateTask(downloadURL string) {
 	updateProgress.Percent = 0
 	updateProgress.Written = 0
 	updateProgress.Total = 0
+	updateProgress.cancelCh = make(chan struct{})
 	updateProgress.mu.Unlock()
 
 	go func() {
@@ -2972,14 +3021,52 @@ func startUpdateTask(downloadURL string) {
 
 		advLog("info", "开始下载更新镜像: " + downloadURL)
 
-		client := &http.Client{Timeout: 10 * time.Minute, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
-		resp, err := client.Get(downloadURL)
-		if err != nil {
-			updateProgress.mu.Lock()
-			updateProgress.Error = "下载失败: " + err.Error()
-			updateProgress.mu.Unlock()
-			advLog("error", "下载失败: %v", err)
-			return
+		client := &http.Client{
+			Timeout: 30 * time.Minute,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		}
+
+		currentURL := downloadURL
+		var resp *http.Response
+		for redirectCount := 0; redirectCount < 10; redirectCount++ {
+			req, err := http.NewRequest("GET", currentURL, nil)
+			if err != nil {
+				updateProgress.mu.Lock()
+				updateProgress.Error = "创建请求失败: " + err.Error()
+				updateProgress.mu.Unlock()
+				advLog("error", "创建请求失败: %v", err)
+				return
+			}
+			req.Header.Set("User-Agent", "rkdev-updater")
+			resp, err = client.Do(req)
+			if err != nil {
+				updateProgress.mu.Lock()
+				updateProgress.Error = "下载失败: " + err.Error()
+				updateProgress.mu.Unlock()
+				advLog("error", "下载失败: %v", err)
+				return
+			}
+			if resp.StatusCode == 301 || resp.StatusCode == 302 || resp.StatusCode == 307 || resp.StatusCode == 308 {
+				loc := resp.Header.Get("Location")
+				resp.Body.Close()
+				if loc == "" {
+					updateProgress.mu.Lock()
+					updateProgress.Error = fmt.Sprintf("重定向响应缺少 Location (状态码: %d)", resp.StatusCode)
+					updateProgress.mu.Unlock()
+					return
+				}
+				if !strings.HasPrefix(loc, "http") {
+					base, _ := url.Parse(currentURL)
+					loc = base.Scheme + "://" + base.Host + loc
+				}
+				advLog("info", "重定向 (%d) -> %s", resp.StatusCode, loc)
+				currentURL = loc
+				continue
+			}
+			break
 		}
 		defer resp.Body.Close()
 
@@ -3006,6 +3093,18 @@ func startUpdateTask(downloadURL string) {
 		lastReport := startTime
 
 		for {
+			select {
+			case <-updateProgress.cancelCh:
+				f.Close()
+				os.Remove(tmpPath)
+				updateProgress.mu.Lock()
+				updateProgress.Error = "下载已取消"
+				updateProgress.Running = false
+				updateProgress.mu.Unlock()
+				advLog("info", "下载已取消")
+				return
+			default:
+			}
 			n, readErr := resp.Body.Read(buf)
 			if n > 0 {
 				wn, werr := f.Write(buf[:n])
@@ -3084,6 +3183,19 @@ func startUpdateTask(downloadURL string) {
 		flashStart := time.Now()
 
 		for {
+			select {
+			case <-updateProgress.cancelCh:
+				devFile.Close()
+				srcFile.Close()
+				os.Remove(tmpPath)
+				updateProgress.mu.Lock()
+				updateProgress.Error = "写入已取消，设备可能无法启动"
+				updateProgress.Running = false
+				updateProgress.mu.Unlock()
+				advLog("warning", "写入已取消，设备可能无法启动")
+				return
+			default:
+			}
 			n, readErr := srcFile.Read(flashBuf)
 			if n > 0 {
 				wn, werr := devFile.Write(flashBuf[:n])
@@ -3137,6 +3249,17 @@ func startUpdateTask(downloadURL string) {
 	}()
 }
 
+func handleUpdateCancel(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	updateProgress.mu.Lock()
+	if updateProgress.Running && updateProgress.cancelCh != nil {
+		close(updateProgress.cancelCh)
+		updateProgress.cancelCh = nil
+	}
+	updateProgress.mu.Unlock()
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
 func handleUpdateDownload(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		URL string `json:"url"`
@@ -3149,7 +3272,7 @@ func handleUpdateDownload(w http.ResponseWriter, r *http.Request) {
 
 	downloadURL := req.URL
 	if downloadURL == "" {
-		asset, _, err := findLatestSpiImage(githubReleaseAPI, "")
+		asset, _, _, _, err := findLatestSpiImage(githubReleaseAPI, "")
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]interface{}{"error": "检测更新失败: " + err.Error()})
