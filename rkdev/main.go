@@ -462,6 +462,7 @@ func main() {
 	http.HandleFunc("/api/devices", func(w http.ResponseWriter, r *http.Request) {
 		jsonOK(w, getFilteredDevices())
 	})
+	http.HandleFunc("/api/reboot", handleReboot)
 	http.HandleFunc("/upload", handleUpload)
 	http.HandleFunc("/api/progress", handleProgress)
 	http.HandleFunc("/api/upload_status", handleUploadStatus)
