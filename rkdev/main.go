@@ -687,7 +687,7 @@ var bootCmdTokens = []struct {
 	{"bootcmd_usb", "USB", "usb"},
 	{"bootcmd_nvme", "NVMe", "nvme"},
 	{"bootcmd_scsi", "SATA/SCSI", "sata"},
-	{"bootcmd_emmc", "eMMC", "emmc"},
+	{"bootcmd_recovery", "Recovery", "recovery"},
 }
 
 // ensureFwEnvConfig 检测 /dev/mtdblock0 是否存在，若存在则检测 /etc/fw_env.config，
