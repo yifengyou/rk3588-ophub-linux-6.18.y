@@ -6,7 +6,11 @@ import (
 	"bytes"
 	"compress/bzip2"
 	"compress/gzip"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"embed"
 	"encoding/binary"
 	"encoding/json"
@@ -15,6 +19,8 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"math/big"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -492,8 +498,71 @@ func main() {
 	// 启动横幅使用 log，这样也会写入日志文件
 	log.Println("========================================")
 	log.Println("  RKdev + Terminal port:80 protocol:http")
+	log.Println("  HTTPS(443) -> HTTP(80) redirect")
 	log.Println("========================================")
+
+	go startHttpsRedirect()
+
 	log.Fatal(http.ListenAndServe(":80", logRequests(http.DefaultServeMux)))
+}
+
+func startHttpsRedirect() {
+	cert, err := generateSelfSignedCert()
+	if err != nil {
+		log.Printf("[REDIRECT] 生成证书失败，443重定向不可用: %v", err)
+		return
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if i := strings.Index(host, ":"); i >= 0 {
+			host = host[:i]
+		}
+		if host == "" {
+			host = r.RemoteAddr
+			if i := strings.LastIndex(host, ":"); i >= 0 {
+				host = host[:i]
+			}
+		}
+		http.Redirect(w, r, "http://"+host+"/", http.StatusMovedPermanently)
+	})
+
+	srv := &http.Server{
+		Addr:      ":443",
+		Handler:   mux,
+		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
+	}
+	log.Fatal(srv.ListenAndServeTLS("", ""))
+}
+
+func generateSelfSignedCert() (tls.Certificate, error) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization: []string{"RKdev"},
+		},
+		NotBefore: time.Now(),
+		NotAfter:  time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:  x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses: []net.IP{net.ParseIP("0.0.0.0")},
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	return tls.Certificate{
+		Certificate: [][]byte{derBytes},
+		PrivateKey:  priv,
+	}, nil
 }
 
 // ============ Terminal (PTY over WebSocket) ============
