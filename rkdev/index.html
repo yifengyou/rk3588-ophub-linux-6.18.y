@@ -256,7 +256,9 @@
         .boot-type-usb .boot-type-badge { background: #e3f2fd; color: #1565c0; border: 1px solid #bbdefb; }
         .boot-type-nvme .boot-type-badge { background: #f3e5f5; color: #7b1fa2; border: 1px solid #e1bee7; }
         .boot-type-sata .boot-type-badge { background: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
+        .boot-type-emmc .boot-type-badge { background: #f3e5f5; color: #7b1fa2; border: 1px solid #e1bee7; }
         .boot-type-recovery .boot-type-badge { background: #fff3e0; color: #e65100; border: 1px solid #ffe0b2; }
+        .boot-type-maskrom .boot-type-badge { background: #fce4ec; color: #c62828; border: 1px solid #f8bbd0; }
         .boot-item.active .boot-type-badge { border-width: 1px; }
         .boot-info { flex: 1; text-align: left; min-width: 0; }
         .boot-label { font-size: 14px; font-weight: 600; color: var(--text-primary); }
@@ -281,9 +283,6 @@
         .btn-boot-save:disabled { background: #999; cursor: not-allowed; }
         .boot-hint { text-align: center; color: var(--text-faint); font-size: 12px; margin-top: 15px; }
         .boot-section-title { color: var(--accent); font-size: 16px; margin-bottom: 5px; text-align: left; border-bottom: 2px solid var(--border-light); padding-bottom: 6px; }
-        .boot-current-cmd { background: #1e1e1e; border-radius: 6px; padding: 12px 16px; margin: 15px 0; text-align: left; overflow-x: auto; }
-        .boot-cmd-label { color: #6a9955; font-size: 12px; margin-right: 8px; }
-        .boot-current-cmd code { color: #d4d4d4; font-family: "Cascadia Code", "Fira Code", Menlo, monospace; font-size: 12px; word-break: break-all; }
         .boot-vars-table { border: 1px solid var(--border-light); border-radius: 6px; overflow: hidden; max-height: 400px; overflow-y: auto; }
         .boot-vars-table table { width: 100%; border-collapse: collapse; }
         .boot-vars-table th { background: var(--bg-section); color: var(--accent); font-size: 13px; padding: 10px 14px; text-align: left; font-weight: 600; position: sticky; top: 0; }
@@ -691,16 +690,12 @@
 <div id="boot-panel" class="panel">
     <div class="boot-card">
         <h1>引导顺序设置</h1>
-        <p class="subtitle">通过配置 U-Boot bootcmd 变量调整启动顺序，保存后重启生效。支持 USB / NVMe / SATA 引导。</p>
+        <p class="subtitle">通过配置 U-Boot bootcmd 变量调整启动顺序，保存后重启生效。</p>
 
         <h2 class="boot-section-title">引导顺序配置</h2>
         <p class="boot-hint" style="text-align:left;margin-bottom:12px;">拖拽调整引导顺序，排第一项为默认启动设备。保存后将写入 bootcmd 环境变量。</p>
         <div class="boot-list" id="boot-list">
             <div style="text-align:center;color:#aaa;padding:30px 0;">点击下方刷新按钮获取当前启动顺序</div>
-        </div>
-        <div class="boot-current-cmd" id="boot-current-cmd" style="display:none;">
-            <span class="boot-cmd-label">当前 bootcmd:</span>
-            <code id="bootcmd-display"></code>
         </div>
         <div class="boot-actions">
             <button type="button" class="btn-boot-refresh" onclick="loadBootOrder()">🔄 刷新</button>
@@ -1973,7 +1968,9 @@
         { type: 'usb',      cmd: 'bootcmd_usb',      label: 'USB',        icon: '🔌' },
         { type: 'nvme',     cmd: 'bootcmd_nvme',     label: 'NVMe',       icon: '⚡' },
         { type: 'sata',     cmd: 'bootcmd_scsi',     label: 'SATA/SCSI',  icon: '💿' },
+        { type: 'emmc',     cmd: 'bootcmd_emmc',     label: 'eMMC',       icon: '💾' },
         { type: 'recovery', cmd: 'bootcmd_recovery', label: 'Recovery',   icon: '🔄' },
+        { type: 'maskrom',  cmd: 'bootcmd_maskrom',  label: 'Maskrom',    icon: '🎯' },
     ];
     let bootOrder = [];
     let bootDisabled = new Set();
@@ -2030,8 +2027,6 @@
                 if (bootOrder.indexOf(bootTypes[j].type) < 0) bootOrder.push(bootTypes[j].type);
             }
             renderBootList();
-            document.getElementById('boot-current-cmd').style.display = 'block';
-            document.getElementById('bootcmd-display').textContent = bootcmd || '(空)';
             renderBootVars(data.vars || []);
             appendLog('引导顺序已加载: ' + data.count + ' 个环境变量, 顺序=' + bootOrder.join(',') + ', bootcmd=' + bootcmd, 'success');
         } catch (e) {
@@ -2246,7 +2241,6 @@
                 alert('保存失败: ' + (result.error || '未知错误'));
             } else {
                 appendLog('引导顺序保存成功: bootcmd=' + bootcmd, 'success');
-                document.getElementById('bootcmd-display').textContent = bootcmd;
                 alert('✅ ' + (result.message || '保存成功'));
             }
         } catch (e) {
