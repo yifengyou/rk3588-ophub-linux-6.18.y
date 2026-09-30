@@ -2604,6 +2604,7 @@
     }
 
     let updateDownloading = false;
+    let updateFlashing = false;
     let updateReader = null;
 
     async function downloadUpdate() {
@@ -2667,13 +2668,19 @@
         } finally {
             updateDownloading = false;
             updateReader = null;
-            dlBtn.classList.remove('btn-cancel');
-            dlBtn.textContent = '⬇️ 下载并安装';
-            dlBtn.disabled = !updateSelectedUrl;
+            if (!updateFlashing) {
+                dlBtn.classList.remove('btn-cancel');
+                dlBtn.textContent = '⬇️ 下载并安装';
+                dlBtn.disabled = !updateSelectedUrl;
+            }
         }
     }
 
     function cancelUpdateDownload() {
+        if (updateFlashing) {
+            showUpdateStatus('update-net-status', '⚠️ 写入固件阶段不可取消，请等待完成', 'warning');
+            return;
+        }
         if (updateReader) {
             updateReader.cancel();
             updateReader = null;
@@ -2698,14 +2705,17 @@
                 '  |  ' + pct.toFixed(1) + '%';
             showUpdateStatus('update-net-status', msg, 'info');
             if (data.phase === 'flashing') {
+                updateFlashing = true;
                 dlBtn.disabled = true;
                 dlBtn.classList.remove('btn-cancel');
                 dlBtn.textContent = '⏳ 写入中...';
             }
         } else if (event === 'done') {
+            updateFlashing = false;
             document.getElementById('update-bar-fill').style.width = '100%';
             showUpdateStatus('update-net-status', '✅ ' + data.message, 'success');
         } else if (event === 'error') {
+            updateFlashing = false;
             document.getElementById('update-progress-bar').classList.remove('visible');
             showUpdateStatus('update-net-status', '❌ ' + data.error, 'error');
         }

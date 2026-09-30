@@ -3472,19 +3472,6 @@ func startUpdateTask(downloadURL string) {
 		flashStart := time.Now()
 
 		for {
-			select {
-			case <-updateProgress.cancelCh:
-				devFile.Close()
-				srcFile.Close()
-				os.Remove(tmpPath)
-				updateProgress.mu.Lock()
-				updateProgress.Error = "写入已取消，设备可能无法启动"
-				updateProgress.Running = false
-				updateProgress.mu.Unlock()
-				advLog("warning", "写入已取消，设备可能无法启动")
-				return
-			default:
-			}
 			n, readErr := srcFile.Read(flashBuf)
 			if n > 0 {
 				wn, werr := devFile.Write(flashBuf[:n])
@@ -3541,6 +3528,11 @@ func startUpdateTask(downloadURL string) {
 func handleUpdateCancel(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	updateProgress.mu.Lock()
+	if updateProgress.Phase == "flashing" {
+		updateProgress.mu.Unlock()
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": false, "error": "写入固件阶段不可取消"})
+		return
+	}
 	if updateProgress.Running && updateProgress.cancelCh != nil {
 		close(updateProgress.cancelCh)
 		updateProgress.cancelCh = nil
