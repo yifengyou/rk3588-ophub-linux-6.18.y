@@ -475,6 +475,7 @@ func main() {
 	http.HandleFunc("/api/logs", handleLogs)
 	http.HandleFunc("/api/boot_order", handleBootOrder)
 	http.HandleFunc("/api/uboot_setenv", handleUbootSetenv)
+	http.HandleFunc("/api/uboot_reset", handleUbootReset)
  	http.HandleFunc("/api/storage", handleStorage)
  	http.HandleFunc("/api/cpu", handleCpu)
  	http.HandleFunc("/api/network", handleNetwork)
@@ -659,10 +660,44 @@ func handleBootOrder(w http.ResponseWriter, r *http.Request) {
 // ============ U-Boot Environment (fw_printenv / fw_setenv) ============
 
 const (
-	mtdblockPath  = "/dev/mtdblock0"
-	fwEnvConfig   = "/etc/fw_env.config"
-	fwEnvContent  = "/dev/mtdblock0 0x3F8000  0x2000  0x8000"
+	mtdblockPath = "/dev/mtdblock0"
+	fwEnvConfig  = "/etc/fw_env.config"
+	fwEnvContent = "/dev/mtdblock0 0x3F8000  0x2000  0x8000"
 )
+
+var ubootDefaultVars = map[string]string{
+	"arch":               "arm",
+	"baudrate":           "1500000",
+	"boot_one_dev":       "run try_extlinux_boot; run try_bootscr_boot; run try_rockchip_fw; ",
+	"boot_targets":       "usb nvme scsi",
+	"bootcmd":            "run bootcmd_usb; run bootcmd_emmc;  run bootcmd_nvme; run bootcmd_scsi; echo ERROR: No bootable device found! Enter loader mode; rockusb 0 mtd 2; ",
+	"bootcmd_emmc":       "echo EMMC: scanning; setenv devtype mmc; mmc rescan; mmc info; setenv devnum 0; if mmc dev 0; then run boot_one_dev; fi; setenv devnum 1; if mmc dev 1; then run boot_one_dev; fi; setenv devnum 2; if mmc dev 2; then run boot_one_dev; fi; echo EMMC: no emmc bootable media; ",
+	"bootcmd_nvme":       "echo NVMe: pci enum; pci enum; nvme scan; setenv devtype nvme; setenv devnum 0; if nvme dev 0; then run boot_one_dev; fi; setenv devnum 1; if nvme dev 1; then run boot_one_dev; fi; echo NVMe: no nvme bootable media; ",
+	"bootcmd_recovery":   "sf probe 0;sf read 0x40000000 0x0 0x2000000;blkmap create spidisk;blkmap map spidisk 0 0x10000 mem 0x40000000;part list blkmap 0;sysboot blkmap 0:2 any ${scriptaddr} /recovery.conf;",
+	"bootcmd_scsi":       "echo SCSI: scsi scan; scsi scan; setenv devtype scsi; setenv devnum 0; if scsi dev 0; then run boot_one_dev; fi; setenv devnum 1; if scsi dev 1; then run boot_one_dev; fi; echo SCSI: no scsi bootable media; ",
+	"bootcmd_usb":        "echo USB: start; usb start; usb info; setenv devtype usb; setenv devnum 0; if usb dev 0; then run boot_one_dev; fi; setenv devnum 1; if usb dev 1; then run boot_one_dev; fi; echo USB: no usb bootable media; ",
+	"bootdelay":          "2",
+	"button_cmd_0":       "run bootcmd_recovery",
+	"button_cmd_0_name":  "Recovery key",
+	"cpu":                "armv8",
+	"fdt_addr_r":        "0x12000000",
+	"fdtfile":            "rockchip/rk3588-bdy-g98.dtb",
+	"fdtoverlay_addr_r":  "0x12100000",
+	"kernel_addr_r":      "0x02000000",
+	"kernel_comp_addr_r": "0x0a000000",
+	"kernel_comp_size":   "0x8000000",
+	"loadaddr":           "0xc00800",
+	"pxefile_addr_r":     "0x00e00000",
+	"ramdisk_addr_r":     "0x12180000",
+	"script_offset_f":    "0xffe000",
+	"script_size_f":      "0x2000",
+	"scriptaddr":         "0x00c00000",
+	"soc":                "rk3588",
+	"try_bootscr_boot":   "for distro_bootpart in 1 2 3 4 8 5 6 7 9; do for prefix in / /boot/; do echo Try ${devtype} ${devnum}:${distro_bootpart} ${prefix}boot.scr; if test -e ${devtype} ${devnum}:${distro_bootpart} ${prefix}boot.scr; then echo Found boot.scr on ${devtype} ${devnum}:${distro_bootpart}; load ${devtype} ${devnum}:${distro_bootpart} ${scriptaddr} ${prefix}boot.scr; source ${scriptaddr}; echo boot.scr returned, trying next...; fi; done; done; ",
+	"try_extlinux_boot":  "for distro_bootpart in 1 2 3 4 8 5 6 7 9; do for extlinux_path in /boot/extlinux/extlinux.conf /extlinux/extlinux.conf /extlinux.conf; do echo Try ${devtype} ${devnum}:${distro_bootpart} ${extlinux_path}; if test -e ${devtype} ${devnum}:${distro_bootpart} ${extlinux_path}; then echo Found extlinux.conf on ${devtype} ${devnum}:${distro_bootpart}; sysboot ${devtype} ${devnum}:${distro_bootpart} any ${scriptaddr} ${extlinux_path}; echo sysboot returned, trying next...; fi; done; done; ",
+	"try_recovery_boot":  "echo Recovery: scanning ${devtype} ${devnum}; if test -e ${devtype} ${devnum}:1 /recovery.conf; then echo Found recovery.conf on ${devtype} ${devnum}:1; sysboot ${devtype} ${devnum}:1 any ${scriptaddr} /recovery.conf; echo sysboot returned, trying next...; fi; if test -e ${devtype} ${devnum}:1 /boot/recovery.conf; then echo Found recovery.conf on ${devtype} ${devnum}:1; sysboot ${devtype} ${devnum}:1 any ${scriptaddr} /boot/recovery.conf; echo sysboot returned, trying next...; fi; if test -e ${devtype} ${devnum}:1 /recovery/recovery.conf; then echo Found recovery.conf on ${devtype} ${devnum}:1; sysboot ${devtype} ${devnum}:1 any ${scriptaddr} /recovery/recovery.conf; echo sysboot returned, trying next...; fi; if test -e ${devtype} ${devnum}:2 /recovery.conf; then echo Found recovery.conf on ${devtype} ${devnum}:2; sysboot ${devtype} ${devnum}:2 any ${scriptaddr} /recovery.conf; echo sysboot returned, trying next...; fi; if test -e ${devtype} ${devnum}:2 /boot/recovery.conf; then echo Found recovery.conf on ${devtype} ${devnum}:2; sysboot ${devtype} ${devnum}:2 any ${scriptaddr} /boot/recovery.conf; echo sysboot returned, trying next...; fi; if test -e ${devtype} ${devnum}:2 /recovery/recovery.conf; then echo Found recovery.conf on ${devtype} ${devnum}:2; sysboot ${devtype} ${devnum}:2 any ${scriptaddr} /recovery/recovery.conf; echo sysboot returned, trying next...; fi; if test -e ${devtype} ${devnum}:3 /recovery.conf; then echo Found recovery.conf on ${devtype} ${devnum}:3; sysboot ${devtype} ${devnum}:3 any ${scriptaddr} /recovery.conf; echo sysboot returned, trying next...; fi; if test -e ${devtype} ${devnum}:3 /boot/recovery.conf; then echo Found recovery.conf on ${devtype} ${devnum}:3; sysboot ${devtype} ${devnum}:3 any ${scriptaddr} /boot/recovery.conf; echo sysboot returned, trying next...; fi; if test -e ${devtype} ${devnum}:3 /recovery/recovery.conf; then echo Found recovery.conf on ${devtype} ${devnum}:3; sysboot ${devtype} ${devnum}:3 any ${scriptaddr} /recovery/recovery.conf; echo sysboot returned, trying next...; fi; if test -e ${devtype} ${devnum}:4 /recovery.conf; then echo Found recovery.conf on ${devtype} ${devnum}:4; sysboot ${devtype} ${devnum}:4 any ${scriptaddr} /recovery.conf; echo sysboot returned, trying next...; fi; if test -e ${devtype} ${devnum}:4 /boot/recovery.conf; then echo Found recovery.conf on ${devtype} ${devnum}:4; sysboot ${devtype} ${devnum}:4 any ${scriptaddr} /boot/recovery.conf; echo sysboot returned, trying next...; fi; if test -e ${devtype} ${devnum}:4 /recovery/recovery.conf; then echo Found recovery.conf on ${devtype} ${devnum}:4; sysboot ${devtype} ${devnum}:4 any ${scriptaddr} /recovery/recovery.conf; echo sysboot returned, trying next...; fi; echo Recovery scan complete, no valid recovery.conf found; ",
+	"try_rockchip_fw":    "mw.l 0x01fffff8 0 1; mw.l 0x04fffff8 0 1; mw.l 0x07000000 0 1; read ${devtype} ${devnum}:5 0x01fffff8 0 0x14000; if itest.l *0x01fffff8 == 0x4c4e524b; then echo RKFW: KRNL kernel found on ${devtype} ${devnum}:5; read ${devtype} ${devnum}:6 0x04fffff8 0 0x10000; read ${devtype} ${devnum}:4 0x07000000 0 0x1000; if itest.l *0x04fffff8 == 0x4c4e524b && itest.l *0x07000000 == 0x45435352 && itest.l *0x07000800 == 0xedfe0dd0; then echo RKFW: booting rockchip firmware from ${devtype} ${devnum}; if part uuid ${devtype} ${devnum}:8 rkfw_uuid; then setenv rkfw_root root=PARTUUID=${rkfw_uuid}; elif test ${devtype} = nvme; then setenv rkfw_root root=/dev/nvme0n1p8; else setenv rkfw_root root=/dev/mmcblk${devnum}p8; fi; setenv bootargs ${rkfw_root} rootfstype=ext4 rootwait rw console=ttyS2,1500000n8 earlycon=uart8250,mmio32,0xfeb50000; booti 0x02000000 0x05000000:0x2000000 0x07000800; fi; fi; ",
+}
 
 // UbootVar 表示一个 U-Boot 环境变量
 type UbootVar struct {
@@ -710,16 +745,17 @@ func ensureFwEnvConfig() error {
 }
 
 // runFwPrintenv 调用 fw_printenv 获取所有 U-Boot 环境变量
-func runFwPrintenv() ([]UbootVar, error) {
+func runFwPrintenv() ([]UbootVar, bool, error) {
 	out, err := exec.Command("fw_printenv").CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("fw_printenv 执行失败: %v, output: %s", err, string(out))
+	badCRC := strings.Contains(string(out), "Bad CRC")
+	if err != nil && !badCRC {
+		return nil, false, fmt.Errorf("fw_printenv 执行失败: %v, output: %s", err, string(out))
 	}
 
 	var vars []UbootVar
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if line == "" || strings.HasPrefix(line, "Warning:") {
 			continue
 		}
 		idx := strings.Index(line, "=")
@@ -731,7 +767,7 @@ func runFwPrintenv() ([]UbootVar, error) {
 			Value: line[idx+1:],
 		})
 	}
-	return vars, nil
+	return vars, badCRC, nil
 }
 
 // handleUbootGet 处理 GET /api/boot_order
@@ -739,6 +775,35 @@ func runFwPrintenv() ([]UbootVar, error) {
 // 2. 检测 /etc/fw_env.config 是否存在，不存在则写入
 // 3. 调用 fw_printenv 获取所有环境变量
 // 4. 解析 bootcmd 提取引导顺序
+func resetUbootDefaults() error {
+	if err := ensureFwEnvConfig(); err != nil {
+		return err
+	}
+
+	vars, _, err := runFwPrintenv()
+	if err == nil {
+		for _, v := range vars {
+			if _, ok := ubootDefaultVars[v.Name]; !ok {
+				out, delErr := exec.Command("fw_setenv", v.Name).CombinedOutput()
+				if delErr != nil {
+					advLog("warn", "[UBOOT] 删除非出厂变量 %s 失败: %v, output: %s", v.Name, delErr, string(out))
+				} else {
+					advLog("info", "[UBOOT] 删除非出厂变量: %s", v.Name)
+				}
+			}
+		}
+	}
+
+	for name, value := range ubootDefaultVars {
+		out, err := exec.Command("fw_setenv", name, value).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("fw_setenv %s 失败: %v, output: %s", name, err, string(out))
+		}
+		advLog("info", "[UBOOT] 重置变量: %s=%s", name, value)
+	}
+	return nil
+}
+
 func handleUbootGet(w http.ResponseWriter, r *http.Request) {
 	if err := ensureFwEnvConfig(); err != nil {
 		advLog("error", "[UBOOT] %v", err)
@@ -746,11 +811,27 @@ func handleUbootGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars, err := runFwPrintenv()
+	vars, badCRC, err := runFwPrintenv()
 	if err != nil {
 		advLog("error", "[UBOOT] %v", err)
 		jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	if badCRC {
+		advLog("warn", "[UBOOT] 检测到 Bad CRC，环境变量已损坏，正在自动还原出厂变量...")
+		if resetErr := resetUbootDefaults(); resetErr != nil {
+			advLog("error", "[UBOOT] 自动还原失败: %v", resetErr)
+			jsonErr(w, http.StatusInternalServerError, "环境变量 CRC 校验失败，自动还原出厂变量失败: "+resetErr.Error())
+			return
+		}
+		advLog("success", "[UBOOT] 环境变量已自动还原为出厂值")
+		vars, _, err = runFwPrintenv()
+		if err != nil {
+			advLog("error", "[UBOOT] 重置后重新读取失败: %v", err)
+			jsonErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	bootcmd := ""
@@ -891,6 +972,29 @@ func handleUbootSetenv(w http.ResponseWriter, r *http.Request) {
 	advLog("success", "[UBOOT] 环境变量已写入: %s=%s", req.Name, req.Value)
 	log.Printf("[UBOOT] 环境变量已写入: %s=%s", req.Name, req.Value)
 	jsonOK(w, map[string]string{"message": "环境变量 " + req.Name + " 已保存，重启后生效"})
+}
+
+func handleUbootReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonErr(w, http.StatusMethodNotAllowed, "仅支持 POST")
+		return
+	}
+
+	if err := ensureFwEnvConfig(); err != nil {
+		advLog("error", "[UBOOT] %v", err)
+		jsonErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	advLog("warn", "[UBOOT] 手动还原出厂变量...")
+	if err := resetUbootDefaults(); err != nil {
+		advLog("error", "[UBOOT] 手动还原失败: %v", err)
+		jsonErr(w, http.StatusInternalServerError, "还原出厂变量失败: "+err.Error())
+		return
+	}
+
+	advLog("success", "[UBOOT] 环境变量已还原为出厂值")
+	jsonOK(w, map[string]string{"message": "环境变量已还原为出厂值，重启后生效"})
 }
 
 // ============ Upload & Flash ============

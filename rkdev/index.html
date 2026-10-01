@@ -237,7 +237,8 @@
         .footer-line .dot { width: 3px; height: 3px; background: var(--text-faint); border-radius: 50%; }
         .footer-line a { color: var(--accent-light); text-decoration: none; transition: color .2s; }
         .footer-line a:hover { color: var(--accent); text-decoration: underline; }
-        .footer-line .heart { color: #d9534f; font-size: 11px; }
+        .footer-line .heart { color: #d9534f; font-size: 14px; display: inline-block; animation: heartbeat 1.5s ease-in-out infinite; }
+        @keyframes heartbeat { 0%,100% { transform: scale(1); } 50% { transform: scale(1.25); } }
 
         /* ===== Boot Order Panel ===== */
         .boot-card { background: var(--bg-card); padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px var(--shadow-light); transition: background .3s; }
@@ -281,6 +282,8 @@
         .btn-boot-save { background: var(--accent); color: #fff; }
         .btn-boot-save:hover { background: #1a4a80; }
         .btn-boot-save:disabled { background: #999; cursor: not-allowed; }
+        .btn-boot-reset { background: #6c757d; color: #fff; }
+        .btn-boot-reset:hover { background: #5a6268; }
         .boot-hint { text-align: center; color: var(--text-faint); font-size: 12px; margin-top: 15px; }
         .boot-section-title { color: var(--accent); font-size: 16px; margin-bottom: 5px; text-align: left; border-bottom: 2px solid var(--border-light); padding-bottom: 6px; }
         .boot-vars-table { border: 1px solid var(--border-light); border-radius: 6px; overflow: hidden; max-height: 400px; overflow-y: auto; }
@@ -700,6 +703,7 @@
         <div class="boot-actions">
             <button type="button" class="btn-boot-refresh" onclick="loadBootOrder()">🔄 刷新</button>
             <button type="button" class="btn-boot-save" id="btn-boot-save" onclick="saveBootOrder()" disabled>💾 保存顺序</button>
+            <button type="button" class="btn-boot-reset" onclick="resetUbootDefaults()">🔧 恢复出厂变量</button>
         </div>
 
         <h2 class="boot-section-title" style="margin-top:35px;">U-Boot 环境变量</h2>
@@ -2214,6 +2218,25 @@
             it.classList.remove('dragging');
             it.classList.remove('drag-over');
         });
+    }
+
+    async function resetUbootDefaults() {
+        if (!confirm('⚠️ 确定要将所有 U-Boot 环境变量还原为出厂值？当前所有自定义配置将丢失！')) return;
+        try {
+            const resp = await fetch('/api/uboot_reset', { method: 'POST' });
+            const result = await resp.json().catch(() => ({ error: 'HTTP ' + resp.status }));
+            if (!resp.ok || result.error) {
+                alert('❌ 还原出厂变量失败: ' + (result.error || '未知错误'));
+                appendLog('还原出厂变量失败: ' + (result.error || ''), 'error');
+                return;
+            }
+            alert('✅ ' + (result.message || '已还原出厂变量'));
+            appendLog('U-Boot 环境变量已还原为出厂值', 'success');
+            loadBootOrder();
+        } catch (e) {
+            alert('❌ 还原出厂变量失败: ' + e.message);
+            appendLog('还原出厂变量失败: ' + e.message, 'error');
+        }
     }
 
     async function saveBootOrder() {
