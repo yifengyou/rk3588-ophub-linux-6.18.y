@@ -86,7 +86,10 @@
 
         .navbar { width: 100%; background: var(--bg-navbar); box-shadow: 0 2px 4px var(--shadow); margin-bottom: 30px; transition: background .3s; position: sticky; top: 0; z-index: 100; }
         .nav-topbar { display: flex; align-items: center; justify-content: space-between; padding: 0 20px; height: 52px; }
-        .nav-brand { font-size: 18px; font-weight: 800; color: var(--accent); letter-spacing: 1px; white-space: nowrap; }
+        .nav-brand { font-size: 18px; font-weight: 800; color: var(--accent); letter-spacing: 1px; white-space: nowrap; cursor: pointer; position: relative; }
+        .nav-brand-logo { position: absolute; top: calc(100% + 10px); left: 0; z-index: 999; opacity: 0; visibility: hidden; transition: opacity .25s, visibility .25s; pointer-events: none; }
+        .nav-brand:hover .nav-brand-logo { opacity: 1; visibility: visible; }
+        .nav-brand-logo img { width: 150px; height: 150px; border-radius: 16px; object-fit: cover; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
         .nav-actions { display: flex; align-items: center; gap: 8px; }
         .nav-reboot { padding: 6px 14px; color: var(--danger); border: 1px solid var(--danger); border-radius: 6px; font-size: 13px; font-weight: bold; cursor: pointer; transition: all .2s; background: transparent; white-space: nowrap; }
         .nav-reboot:hover { background: var(--danger); color: #fff; }
@@ -126,6 +129,19 @@
 
         .warning-box { background: #fff9c4; border: 1px solid #ffe082; padding: 20px; border-radius: 4px; text-align: left; margin-top: 30px; }
         .warning-box ul { padding-left: 20px; color: #555; }
+
+        .fw-download-section { margin-top: 30px; }
+        .fw-download-title { color: var(--accent); font-size: 16px; margin-bottom: 12px; text-align: left; border-bottom: 2px solid var(--border-light); padding-bottom: 6px; }
+        .fw-download-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+        .fw-download-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; transition: all .2s; display: flex; flex-direction: column; gap: 10px; }
+        .fw-download-card:hover { border-color: var(--accent); box-shadow: 0 4px 12px rgba(0,0,0,.1); transform: translateY(-2px); }
+        .fw-card-header { display: flex; align-items: center; gap: 10px; }
+        .fw-card-icon { font-size: 24px; line-height: 1; }
+        .fw-card-name { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+        .fw-card-desc { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+        .fw-card-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+        .fw-card-link { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 20px; font-size: 12px; text-decoration: none; background: var(--bg-section); color: var(--accent); border: 1px solid var(--border-light); transition: all .15s; }
+        .fw-card-link:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
 
         .status-badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 12px; margin-left: 10px; }
         .status-writing { background: #fff3cd; color: #856404; }
@@ -522,12 +538,18 @@
 <div id="about-overlay" onclick="if(event.target===this)hideAbout()">
     <div class="about-modal">
         <div class="about-header">
-            <h2>彼度云 G98/Z98 固件更新助手</h2>
             <span class="about-close" onclick="hideAbout()">&times;</span>
         </div>
         <div class="about-body">
+            <div style="text-align:center;margin-bottom:16px;">
+                <img src="/res/logo.png" alt="RKdev" style="width:150px;height:150px;border-radius:20px;object-fit:cover;box-shadow:0 4px 16px rgba(0,0,0,.2);">
+            </div>
+            <h2 style="text-align:center;color:var(--accent);font-size:20px;margin:0 0 6px 0;">瑞芯微固件更新助手</h2>
+            <p style="text-align:center;color:var(--text-muted);font-size:14px;margin:0 0 4px 0;">彼度云 G98/Z98 固件更新助手</p>
+            <p style="text-align:center;font-size:13px;margin:0 0 4px 0;color:var(--text-muted);">英文名称：<span style="color:var(--accent);font-weight:700;">RKdev (Rockchip Kernel Developer)</span></p>
+            <p class="about-alias" style="text-align:center;font-size:13px;margin:0 0 10px 0;color:var(--text-muted);">项目别称：<span style="color:var(--accent);font-weight:700;">吊炸天刷机工具</span> 😎</p>
             <p class="about-version">版本: <span class="ver-tag">v{{.BuildTime}}</span></p>
-            <p class="about-desc">本项目为彼度云 G98/Z98 (RK3588) 设备的固件刷写与维护工具，提供固件刷写、引导顺序配置、存储健康检测、终端访问及在线更新等功能。</p>
+            <p class="about-desc">本项目为瑞芯微 RK3588 平台（彼度云 G98/Z98）设备的固件刷写与维护工具，提供固件刷写、引导顺序配置、存储健康检测、终端访问及在线更新等功能。</p>
             <div class="about-section">
                 <h3>📋 功能说明</h3>
                 <ul>
@@ -551,6 +573,8 @@
                 <a href="https://github.com/yifengyou" target="_blank">GitHub: yifengyou</a>
                 <span> | </span>
                 <a href="https://github.com/yifengyou/BDY_G98_RK3588" target="_blank">项目仓库</a>
+                <span> | </span>
+                <a href="https://github.com/yifengyou/BDY_G98_RK3588/issues/new" target="_blank" rel="noopener">🐛 Bug 反馈</a>
             </div>
         </div>
     </div>
@@ -558,7 +582,9 @@
 
 <div class="navbar">
     <div class="nav-topbar">
-        <div class="nav-brand">RKdev</div>
+        <div class="nav-brand" id="nav-brand">RKdev
+            <div class="nav-brand-logo" id="nav-brand-logo"><img src="/res/logo.png" alt="RKdev Logo"></div>
+        </div>
         <div class="nav-actions">
             <div class="nav-theme" id="nav-theme-btn" onclick="toggleTheme()">🌙 暗色</div>
             <div class="nav-about" onclick="showAbout()">ℹ️ 关于</div>
@@ -621,6 +647,11 @@
                 </div>
                 <div class="adv-toggle">
                     <label><input type="checkbox" id="adv-mode-check" onchange="toggleAdvancedMode()"> 日志详情</label>
+                </div>
+
+                <div class="fw-download-section">
+                    <h2 class="fw-download-title">📥 固件下载</h2>
+                    <div class="fw-download-grid" id="fw-download-grid"></div>
                 </div>
             </div>
         </div>
@@ -711,7 +742,7 @@
         <div class="boot-vars-table">
             <table id="boot-vars-table">
                 <thead>
-                    <tr><th style="width:25%;">变量名</th><th>值</th></tr>
+                    <tr><th style="width:25%;">变量名</th><th>变量值</th></tr>
                 </thead>
                 <tbody id="boot-vars-body">
                     <tr><td colspan="2" style="text-align:center;color:#aaa;padding:20px 0;">点击刷新按钮加载环境变量</td></tr>
@@ -978,6 +1009,8 @@
         <span class="dot"></span>
         <a href="https://github.com/yifengyou" target="_blank">github/yifengyou</a>
         <span class="dot"></span>
+        <a href="https://github.com/yifengyou/BDY_G98_RK3588/issues/new" target="_blank" rel="noopener" title="提交 Bug 反馈">🐛 Bug 反馈</a>
+        <span class="dot"></span>
         <span>Built with <span class="heart">&#9829;</span></span>
         <span class="dot"></span>
         <span class="ver-tag">v{{.BuildTime}}</span>
@@ -1034,6 +1067,162 @@
                 }
             }
         }
+    }
+
+    // ==================== Firmware Download List ====================
+    const fwDownloadData = [
+        {
+            icon: '/res/logo-android.svg',
+            name: 'Android',
+            desc: 'Google 开源移动操作系统，适用于 RK3588 平台',
+            links: [
+                { label: '固件下载', url: 'https://www.rockchip.fr/Android%2012.html' },
+                { label: '官网', url: 'https://www.android.com/' },
+            ]
+        },
+        {
+            icon: '/res/logo-ubuntu.png',
+            name: 'Ubuntu',
+            desc: '基于 Debian 的流行 Linux 发行版，适合桌面与服务器',
+            links: [
+                { label: '固件下载', url: 'https://cdimage.ubuntu.com/releases/' },
+                { label: '官网', url: 'https://ubuntu.com/' },
+            ]
+        },
+        {
+            icon: '/res/logo-centos.png',
+            name: 'CentOS',
+            desc: '基于 RHEL 的企业级 Linux 发行版，稳定可靠',
+            links: [
+                { label: '固件下载', url: 'https://www.centos.org/download/' },
+                { label: '官网', url: 'https://www.centos.org/' },
+            ]
+        },
+        {
+            icon: '/res/logo-debian.svg',
+            name: 'Debian',
+            desc: '完全由社区维护的经典 Linux 发行版，Ubuntu 的上游',
+            links: [
+                { label: '固件下载', url: 'https://www.debian.org/distrib/' },
+                { label: '官网', url: 'https://www.debian.org/' },
+            ]
+        },
+        {
+            icon: '/res/logo-fedora.ico',
+            name: 'Fedora',
+            desc: '由 Red Hat 赞助的前沿 Linux 发行版，技术激进',
+            links: [
+                { label: '固件下载', url: 'https://fedoraproject.org/server/download' },
+                { label: '官网', url: 'https://fedoraproject.org/' },
+            ]
+        },
+        {
+            icon: '/res/logo-armbian.png',
+            name: 'Armbian',
+            desc: '专为 ARM 开发板打造的轻量级 Linux，基于 Debian',
+            links: [
+                { label: '固件下载', url: 'https://www.armbian.com/download/' },
+                { label: '官网', url: 'https://www.armbian.com/' },
+            ]
+        },
+        {
+            icon: '/res/logo-openwrt.png',
+            name: 'OpenWrt',
+            desc: '开源路由器固件系统，支持丰富的软件包生态',
+            links: [
+                { label: '固件下载', url: 'https://firmware-selector.openwrt.org/' },
+                { label: '官网', url: 'https://openwrt.org/' },
+            ]
+        },
+        {
+            icon: '/res/logo-immortalwrt.png',
+            name: 'ImmortalWrt',
+            desc: '基于 OpenWrt 的国内定制分支，本地化体验更好',
+            links: [
+                { label: '固件下载', url: 'https://firmware-selector.immortalwrt.org/' },
+                { label: '官网', url: 'https://immortalwrt.org/' },
+            ]
+        },
+        {
+            icon: '/res/logo-fnnas.png',
+            name: '飞牛OS',
+            desc: '基于 Debian 的国产 NAS 系统，支持 Docker 与虚拟机',
+            links: [
+                { label: '固件下载', url: 'https://www.fnnas.com/download/' },
+                { label: '官网', url: 'https://www.fnnas.com/' },
+            ]
+        },
+        {
+            icon: '/res/logo-qwrt.png',
+            name: 'QWRT',
+            desc: '基于 OpenWrt 的路由器固件，酷熊团队维护',
+            links: [
+                { label: '固件下载', url: 'https://www.koolcenter.com/' },
+                { label: '官网', url: 'https://www.koolcenter.com/' },
+            ]
+        },
+        {
+            icon: '/res/logo-lede.png',
+            name: 'LEDE',
+            desc: 'OpenWrt 的社区分支，后已合并回 OpenWrt',
+            links: [
+                { label: '固件下载', url: 'https://lede-project.org/downloads' },
+                { label: '官网', url: 'https://lede-project.org/' },
+            ]
+        },
+        {
+            icon: '/res/logo-istoreos.png',
+            name: 'iStoreOS',
+            desc: '基于 OpenWrt 的软路由/NAS 系统，开箱即用',
+            links: [
+                { label: '固件下载', url: 'https://fw.istoreos.com/' },
+                { label: '官网', url: 'https://www.istoreos.com/' },
+            ]
+        },
+        {
+            icon: '/res/logo-openeuler.png',
+            name: 'openEuler',
+            desc: '华为开源的企业级 Linux 发行版，面向数字基础设施',
+            links: [
+                { label: '固件下载', url: 'https://www.openeuler.org/zh/download/' },
+                { label: '官网', url: 'https://www.openeuler.org/' },
+            ]
+        },
+        {
+            icon: '/res/logo-opencloudos.png',
+            name: 'OpenCloudOS',
+            desc: '腾讯开源的云原生操作系统，完全开源免费',
+            links: [
+                { label: '固件下载', url: 'https://www.opencloudos.org/download' },
+                { label: '官网', url: 'https://www.opencloudos.org/' },
+            ]
+        },
+        {
+            icon: '/res/logo-openanolis.png',
+            name: 'OpenAnolis',
+            desc: '阿里开源的 Linux 发行版，CentOS 替代方案',
+            links: [
+                { label: '固件下载', url: 'https://openanolis.cn/download' },
+                { label: '官网', url: 'https://openanolis.cn/' },
+            ]
+        },
+    ];
+
+    function renderFwDownloads() {
+        const grid = document.getElementById('fw-download-grid');
+        if (!grid) return;
+        grid.innerHTML = fwDownloadData.map(fw => `
+            <div class="fw-download-card">
+                <div class="fw-card-header">
+                    <span class="fw-card-icon"><img src="${fw.icon}" alt="${fw.name}" style="width:24px;height:24px;object-fit:contain;"></span>
+                    <span class="fw-card-name">${fw.name}</span>
+                </div>
+                <div class="fw-card-desc">${fw.desc}</div>
+                <div class="fw-card-links">
+                    ${fw.links.map(l => `<a class="fw-card-link" href="${l.url}" target="_blank" rel="noopener">🔗 ${l.label}</a>`).join('')}
+                </div>
+            </div>
+        `).join('');
     }
 
     // ==================== Terminal Themes ====================
@@ -2857,6 +3046,7 @@
         document.getElementById('update-version-list').style.display = 'none';
         updateSelectedUrl = '';
         loadDevices();
+        renderFwDownloads();
     };
 </script>
 </body>
