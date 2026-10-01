@@ -88,8 +88,8 @@
         .nav-topbar { display: flex; align-items: center; justify-content: space-between; padding: 0 20px; height: 52px; }
         .nav-brand { font-size: 42px; font-weight: 900; letter-spacing: 4px; white-space: nowrap; cursor: pointer; position: relative; color: #1a5fc4; font-family: "Cascadia Code", "Consolas", "SF Mono", monospace; text-shadow: 0 0 1px rgba(26,95,196,.8); transition: all .35s ease; }
         .nav-brand::after { content: ''; position: absolute; left: 0; bottom: -2px; width: 100%; height: 2px; background: linear-gradient(90deg, transparent, #1a5fc4, #00d4ff, transparent); transform: scaleX(0); transition: transform .3s ease; }
-        .nav-brand:hover { color: #00d4ff; text-shadow: 0 0 6px rgba(0,212,255,.4), 0 0 12px rgba(0,168,255,.15); letter-spacing: 5px; }
-        .nav-brand:hover::after { transform: scaleX(1); box-shadow: 0 0 4px rgba(0,212,255,.4); }
+        .nav-brand:hover { color: #00d4ff; text-shadow: 0 0 4px rgba(0,212,255,.3); letter-spacing: 7px; }
+        .nav-brand:hover::after { transform: scaleX(1); box-shadow: 0 0 4px rgba(0,212,255,.3); }
         .nav-brand-logo { position: absolute; top: calc(100% + 10px); left: 0; z-index: 999; opacity: 0; visibility: hidden; transition: opacity .25s, visibility .25s; pointer-events: none; }
         .nav-brand:hover .nav-brand-logo { opacity: 1; visibility: visible; }
         .nav-brand-logo img { width: 150px; height: 150px; border-radius: 16px; object-fit: cover; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
@@ -256,8 +256,8 @@
         .footer-line .dot { width: 3px; height: 3px; background: var(--text-faint); border-radius: 50%; }
         .footer-line a { color: var(--accent-light); text-decoration: none; transition: color .2s; }
         .footer-line a:hover { color: var(--accent); text-decoration: underline; }
-        .footer-line .heart { color: #d9534f; font-size: 14px; display: inline-block; animation: heartbeat 1.5s ease-in-out infinite; }
-        @keyframes heartbeat { 0%,100% { transform: scale(1); } 50% { transform: scale(1.25); } }
+        .footer-line .heart { color: #e25555; font-size: 18px; display: inline-block; animation: heartbeat 1.2s ease-in-out infinite; filter: drop-shadow(0 0 3px rgba(226,85,85,.4)); }
+        @keyframes heartbeat { 0%,100% { transform: scale(1); } 15% { transform: scale(1.3); } 30% { transform: scale(1); } 45% { transform: scale(1.2); } 60% { transform: scale(1); } }
 
         /* ===== Boot Order Panel ===== */
         .boot-card { background: var(--bg-card); padding: 40px; border-radius: 8px; box-shadow: 0 2px 10px var(--shadow-light); transition: background .3s; }
@@ -1008,7 +1008,7 @@
 
 <div class="footer">
     <div class="footer-line">
-        <span>Copyright</span>
+        <span>Copyright &copy; 2026</span>
         <span class="dot"></span>
         <a href="https://github.com/yifengyou" target="_blank">github/yifengyou</a>
         <span class="dot"></span>
@@ -1075,54 +1075,18 @@
     // ==================== Firmware Download List ====================
     const fwDownloadData = [
         {
-            icon: '/res/logo-android.svg',
-            name: 'Android',
-            desc: 'Google 开源移动操作系统，适用于 RK3588 平台',
+            icon: '/res/logo-fnnas.png',
+            name: '飞牛OS',
+            desc: '基于 Debian 的国产 NAS 系统，支持 Docker 容器与虚拟机',
             links: [
-                { label: '固件下载', url: 'https://www.rockchip.fr/Android%2012.html' },
-                { label: '官网', url: 'https://www.android.com/' },
-            ]
-        },
-        {
-            icon: '/res/logo-ubuntu.png',
-            name: 'Ubuntu',
-            desc: '基于 Debian 的流行 Linux 发行版，适合桌面与服务器',
-            links: [
-                { label: '固件下载', url: 'https://cdimage.ubuntu.com/releases/' },
-                { label: '官网', url: 'https://ubuntu.com/' },
-            ]
-        },
-        {
-            icon: '/res/logo-centos.png',
-            name: 'CentOS',
-            desc: '基于 RHEL 的企业级 Linux 发行版，稳定可靠',
-            links: [
-                { label: '固件下载', url: 'https://www.centos.org/download/' },
-                { label: '官网', url: 'https://www.centos.org/' },
-            ]
-        },
-        {
-            icon: '/res/logo-debian.svg',
-            name: 'Debian',
-            desc: '完全由社区维护的经典 Linux 发行版，Ubuntu 的上游',
-            links: [
-                { label: '固件下载', url: 'https://www.debian.org/distrib/' },
-                { label: '官网', url: 'https://www.debian.org/' },
-            ]
-        },
-        {
-            icon: '/res/logo-fedora.ico',
-            name: 'Fedora',
-            desc: '由 Red Hat 赞助的前沿 Linux 发行版，技术激进',
-            links: [
-                { label: '固件下载', url: 'https://fedoraproject.org/server/download' },
-                { label: '官网', url: 'https://fedoraproject.org/' },
+                { label: '固件下载', url: 'https://www.fnnas.com/download/' },
+                { label: '官网', url: 'https://www.fnnas.com/' },
             ]
         },
         {
             icon: '/res/logo-armbian.png',
             name: 'Armbian',
-            desc: '专为 ARM 开发板打造的轻量级 Linux，基于 Debian',
+            desc: '专为 ARM 开发板打造的轻量级 Linux，基于 Debian 深度优化',
             links: [
                 { label: '固件下载', url: 'https://www.armbian.com/download/' },
                 { label: '官网', url: 'https://www.armbian.com/' },
@@ -1131,43 +1095,34 @@
         {
             icon: '/res/logo-openwrt.png',
             name: 'OpenWrt',
-            desc: '开源路由器固件系统，支持丰富的软件包生态',
+            desc: '开源路由器固件系统，支持丰富的软件包生态与高度可定制',
             links: [
                 { label: '固件下载', url: 'https://firmware-selector.openwrt.org/' },
                 { label: '官网', url: 'https://openwrt.org/' },
             ]
         },
         {
-            icon: '/res/logo-immortalwrt.png',
-            name: 'ImmortalWrt',
-            desc: '基于 OpenWrt 的国内定制分支，本地化体验更好',
-            links: [
-                { label: '固件下载', url: 'https://firmware-selector.immortalwrt.org/' },
-                { label: '官网', url: 'https://immortalwrt.org/' },
-            ]
-        },
-        {
-            icon: '/res/logo-fnnas.png',
-            name: '飞牛OS',
-            desc: '基于 Debian 的国产 NAS 系统，支持 Docker 与虚拟机',
-            links: [
-                { label: '固件下载', url: 'https://www.fnnas.com/download/' },
-                { label: '官网', url: 'https://www.fnnas.com/' },
-            ]
-        },
-        {
             icon: '/res/logo-qwrt.png',
             name: 'QWRT',
-            desc: '基于 OpenWrt 的路由器固件，酷熊团队维护',
+            desc: '基于 OpenWrt 深度定制的路由器固件，由酷熊团队维护',
             links: [
                 { label: '固件下载', url: 'https://www.koolcenter.com/' },
                 { label: '官网', url: 'https://www.koolcenter.com/' },
             ]
         },
         {
+            icon: '/res/logo-immortalwrt.png',
+            name: 'ImmortalWrt',
+            desc: '基于 OpenWrt 的国内定制分支，本地化体验更加完善',
+            links: [
+                { label: '固件下载', url: 'https://firmware-selector.immortalwrt.org/' },
+                { label: '官网', url: 'https://immortalwrt.org/' },
+            ]
+        },
+        {
             icon: '/res/logo-lede.png',
             name: 'LEDE',
-            desc: 'OpenWrt 的社区分支，后已合并回 OpenWrt',
+            desc: 'OpenWrt 的社区分支项目，后已正式合并回 OpenWrt',
             links: [
                 { label: '固件下载', url: 'https://lede-project.org/downloads' },
                 { label: '官网', url: 'https://lede-project.org/' },
@@ -1176,16 +1131,61 @@
         {
             icon: '/res/logo-istoreos.png',
             name: 'iStoreOS',
-            desc: '基于 OpenWrt 的软路由/NAS 系统，开箱即用',
+            desc: '基于 OpenWrt 的软路由/NAS 系统，开箱即用体验友好',
             links: [
                 { label: '固件下载', url: 'https://fw.istoreos.com/' },
                 { label: '官网', url: 'https://www.istoreos.com/' },
             ]
         },
         {
+            icon: '/res/logo-android.svg',
+            name: 'Android',
+            desc: 'Google 开源移动操作系统，广泛适配各类 RK3588 平台',
+            links: [
+                { label: '固件下载', url: 'https://www.rockchip.fr/Android%2012.html' },
+                { label: '官网', url: 'https://www.android.com/' },
+            ]
+        },
+        {
+            icon: '/res/logo-ubuntu.png',
+            name: 'Ubuntu',
+            desc: '基于 Debian 的流行 Linux 发行版，适合桌面与服务器场景',
+            links: [
+                { label: '固件下载', url: 'https://cdimage.ubuntu.com/releases/' },
+                { label: '官网', url: 'https://ubuntu.com/' },
+            ]
+        },
+        {
+            icon: '/res/logo-debian.svg',
+            name: 'Debian',
+            desc: '完全由社区维护的经典 Linux 发行版，是 Ubuntu 的上游',
+            links: [
+                { label: '固件下载', url: 'https://www.debian.org/distrib/' },
+                { label: '官网', url: 'https://www.debian.org/' },
+            ]
+        },
+        {
+            icon: '/res/logo-centos.png',
+            name: 'CentOS',
+            desc: '基于 RHEL 源码构建的企业级 Linux 发行版，稳定可靠',
+            links: [
+                { label: '固件下载', url: 'https://www.centos.org/download/' },
+                { label: '官网', url: 'https://www.centos.org/' },
+            ]
+        },
+        {
+            icon: '/res/logo-fedora.ico',
+            name: 'Fedora',
+            desc: '由 Red Hat 赞助的前沿 Linux 发行版，技术更新激进',
+            links: [
+                { label: '固件下载', url: 'https://fedoraproject.org/server/download' },
+                { label: '官网', url: 'https://fedoraproject.org/' },
+            ]
+        },
+        {
             icon: '/res/logo-openeuler.png',
             name: 'openEuler',
-            desc: '华为开源的企业级 Linux 发行版，面向数字基础设施',
+            desc: '华为开源的企业级 Linux 发行版，面向数字基础设施平台',
             links: [
                 { label: '固件下载', url: 'https://www.openeuler.org/zh/download/' },
                 { label: '官网', url: 'https://www.openeuler.org/' },
@@ -1194,7 +1194,7 @@
         {
             icon: '/res/logo-opencloudos.png',
             name: 'OpenCloudOS',
-            desc: '腾讯开源的云原生操作系统，完全开源免费',
+            desc: '腾讯开源的云原生操作系统，完全开源免费且社区驱动',
             links: [
                 { label: '固件下载', url: 'https://www.opencloudos.org/download' },
                 { label: '官网', url: 'https://www.opencloudos.org/' },
@@ -1203,7 +1203,7 @@
         {
             icon: '/res/logo-openanolis.png',
             name: 'OpenAnolis',
-            desc: '阿里开源的 Linux 发行版，CentOS 替代方案',
+            desc: '阿里开源的 Linux 发行版，定位为 CentOS 的平滑替代',
             links: [
                 { label: '固件下载', url: 'https://openanolis.cn/download' },
                 { label: '官网', url: 'https://openanolis.cn/' },
