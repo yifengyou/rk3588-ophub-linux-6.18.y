@@ -86,7 +86,10 @@
 
         .navbar { width: 100%; background: var(--bg-navbar); box-shadow: 0 2px 4px var(--shadow); margin-bottom: 30px; transition: background .3s; position: sticky; top: 0; z-index: 100; }
         .nav-topbar { display: flex; align-items: center; justify-content: space-between; padding: 0 20px; height: 52px; }
-        .nav-brand { font-size: 18px; font-weight: 800; color: var(--accent); letter-spacing: 1px; white-space: nowrap; cursor: pointer; position: relative; }
+        .nav-brand { font-size: 42px; font-weight: 900; letter-spacing: 4px; white-space: nowrap; cursor: pointer; position: relative; color: #1a5fc4; font-family: "Cascadia Code", "Consolas", "SF Mono", monospace; text-shadow: 0 0 1px rgba(26,95,196,.8); transition: all .35s ease; }
+        .nav-brand::after { content: ''; position: absolute; left: 0; bottom: -2px; width: 100%; height: 2px; background: linear-gradient(90deg, transparent, #1a5fc4, #00d4ff, transparent); transform: scaleX(0); transition: transform .3s ease; }
+        .nav-brand:hover { color: #00d4ff; text-shadow: 0 0 6px rgba(0,212,255,.4), 0 0 12px rgba(0,168,255,.15); letter-spacing: 5px; }
+        .nav-brand:hover::after { transform: scaleX(1); box-shadow: 0 0 4px rgba(0,212,255,.4); }
         .nav-brand-logo { position: absolute; top: calc(100% + 10px); left: 0; z-index: 999; opacity: 0; visibility: hidden; transition: opacity .25s, visibility .25s; pointer-events: none; }
         .nav-brand:hover .nav-brand-logo { opacity: 1; visibility: visible; }
         .nav-brand-logo img { width: 150px; height: 150px; border-radius: 16px; object-fit: cover; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
@@ -519,7 +522,7 @@
 
         @media (max-width: 768px) {
             .nav-topbar { padding: 0 10px; height: 46px; }
-            .nav-brand { font-size: 16px; }
+            .nav-brand { font-size: 28px; }
             .nav-tabbar { padding: 0 8px 8px 8px; gap: 3px; }
             .nav-tab { padding: 6px 12px; font-size: 13px; }
             .nav-reboot, .nav-about, .nav-theme { padding: 5px 10px; font-size: 12px; }
