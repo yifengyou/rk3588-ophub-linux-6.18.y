@@ -1,9 +1,9 @@
-name: AIoT 3588IED Recovery Build
+name: AIoT 3588IED Build
 
 on:
   push:
     branches:
-      - aiot-3588ied-recovery
+      - aiot-3588ied
   repository_dispatch:
   workflow_dispatch:
 
@@ -12,7 +12,7 @@ env:
   ACTIONS_STEP_DEBUG: true
 
 jobs:
-  build-recovery:
+  build:
     runs-on: ubuntu-22.04
 
     steps:
@@ -67,14 +67,14 @@ jobs:
             sudo locales lsb-release ca-certificates gnupg dirmngr golang-go
           df -Th
 
-      - name: Run Recovery Build in Ubuntu 22.04 container
+      - name: Run Build in Ubuntu 22.04 container
         working-directory: /builder
         run: |
           pwd
           sudo /bin/cp -a ${{ github.workspace }}/* .
           ls -alh
           sudo chown -R root:root .
-          sudo ./kdev-recovery.sh
+          sudo ./kdev-build.sh
           sudo mkdir -p /builder/release
           sudo cp output/* /builder/release
 
@@ -83,17 +83,17 @@ jobs:
           ls -alh  /builder/release/*
           md5sum /builder/release/*
 
-      - name: Upload Recovery to Release
+      - name: Upload to Release
         uses: ncipollo/release-action@main
         with:
-          tag: aiot-3588ied-recovery
+          tag: aiot-3588ied
           artifacts: /builder/release/*
           allowUpdates: true
           removeArtifacts: false
           replacesArtifacts: true
           token: ${{ secrets.GITHUB_TOKEN }}
           body: |
-            # 视美泰 AIoT-3588IED Recovery 镜像
+            # 视美泰 AIoT-3588IED 镜像
 
             ## 免责声明
 
