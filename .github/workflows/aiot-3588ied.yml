@@ -3,7 +3,7 @@ name: AIoT 3588IED Recovery Build
 on:
   push:
     branches:
-      - aiot-3588ied
+      - aiot-3588ied-recovery
   repository_dispatch:
   workflow_dispatch:
 
