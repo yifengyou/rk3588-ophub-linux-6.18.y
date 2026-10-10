@@ -3,7 +3,7 @@ name: BDY G98 Recovery Build
 on:
   push:
     branches:
-      - kdev-recovery
+      - bdy-g98-recovery
   repository_dispatch:
   workflow_dispatch:
 
