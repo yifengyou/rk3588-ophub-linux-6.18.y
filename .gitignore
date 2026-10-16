@@ -191,3 +191,5 @@ sphinx_*/
 /recovery/
 /rootfs/rkdev_arm64
 /ref/
+/release/
+
